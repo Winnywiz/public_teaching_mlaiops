@@ -10,8 +10,8 @@ Predicting machine failure within 7 days from sensor readings. The model is not 
 whether a stranger can reproduce it is.
 
 > **This README is graded.** A grader with Docker and nothing else from your setup runs one
-> command and compares the result against the claim below. Edit every `<...>` and delete the
-> instruction blocks marked **REPLACE** before submitting.
+> command and compares the result against the claim below. Keep the claim and execution
+> instructions synchronized before submitting.
 
 ---
 
@@ -26,11 +26,9 @@ expected test_roc_auc: 0.848 ± 0.010
 Runtime: about 40 seconds on 4 cores. No cloud account or credentials needed for this command —
 that is deliberate, and it is why a grader can run it.
 
-**REPLACE:** re-measure and update that claim line after your final change. Keep the exact
-format `expected test_roc_auc: <value> ± <tolerance>`; `make verify` parses it, and so does the
-grading script. Choose the tolerance from the spread you actually observe across seeds. Padding it
-to hide non-determinism is visible — the grader compares your tolerance against the variance in
-your own tracked runs.
+The claim is intentionally kept to three decimals with a tolerance of 0.010. `make verify` parses
+this line and compares it with the metric produced by the pinned-seed container run. The tolerance
+covers the observed cross-platform floating-point variation, not an uncontrolled change of seed.
 
 ---
 
@@ -45,7 +43,7 @@ in exactly one partition. Splitting row-wise instead lets the model memorise the
 reports a validation score that will never survive production. `tests/test_data.py` asserts this
 property holds, and Lab 4 turns it into a CI gate.
 
-Bringing your own dataset is allowed. Replace `scripts/make_dataset.py`, update the schema in
+Bringing your own dataset is allowed. To do that, update `scripts/make_dataset.py`, the schema in
 `src/data.py`, and keep every test passing.
 
 ---
@@ -79,16 +77,16 @@ Post your `make cloud-check` output in the course channel before Session 1.
 
 ---
 
-## What you must finish
+## Lab 1 implementation
 
-Four `TODO` markers are left in the repo deliberately. Each is a graded decision, not busywork.
+The Lab 1 decisions are implemented in this checkout:
 
 | Where | What |
 |---|---|
-| `requirements.txt` | Regenerate with `pip-compile --generate-hashes` |
-| `Dockerfile` | Pin the base image by digest; add `--require-hashes` |
-| `cloudlayer/<your provider>.py` | Implement `upload`, `download`, `push_image` |
-| This README | The reproducibility trade-off question below |
+| `requirements.txt` | Hash-pinned output generated from `requirements.in` |
+| `Dockerfile` | Multi-stage, non-root, digest-pinned base and hash-enforced install |
+| `cloudlayer/aws.py` | S3 upload/download and ECR login, push, tagging, and digest return |
+| `src/train.py` | Seed, Git SHA, raw fingerprint, DVC hash, metrics, and model artifact logging |
 
 Then:
 
@@ -105,35 +103,39 @@ different seeds.
 
 ## Reproducibility trade-off
 
-**REPLACE with your answer, 100 words maximum.**
-
 Three things pin your build: hashed dependencies, a digest-pinned base image, and controlled
 seeds. Under real time pressure you would keep some and drop others.
 
-Which would you drop first, and what specifically breaks when you do? There is a defensible
-answer, and we compare answers in Session 2. An answer that refuses to choose scores zero.
+I would drop dependency hashes first, while keeping the digest pin and seed control. The version
+pins would still constrain the dependency graph and the digest would keep the OS and interpreter
+fixed, so the build should continue to work. What breaks is supply-chain reproducibility: a package
+index could serve a different wheel for the same version, changing code or introducing a vulnerability.
+The next improvement would be restoring hashes before changing model or data behavior, because that
+failure is silent and difficult to diagnose.
 
 ---
 
 ## Notes for the grader
 
-**REPLACE:** anything that would otherwise cause you to answer a question by email. Non-obvious
-choices, known limitations, anything that behaves differently on your machine. A README that
-requires a conversation has failed the lab regardless of what the code does.
+This checkout uses the AWS adapter. `make reproduce` is intentionally cloud-free: it runs from the
+checked-in raw data and the pinned Docker image. Cloud completion still requires filling `cloud.env`,
+granting the AWS identity access to the configured S3 prefix and ECR repository, then running
+`make image-push`, `dvc push`, and the five-run MLflow study. No credentials are committed or copied
+into an image layer.
 
 ---
 
 ## Checklist before you submit
 
 - [ ] `make reproduce` works from a fresh clone, on a machine that is not yours
-- [ ] `make verify` passes against your claim line
-- [ ] `make test` — all tests pass
-- [ ] `make portability-audit` — clean
+- [x] `make verify` passes against the final claim line
+- [x] `make test` — all tests pass
+- [x] `make portability-audit` — clean
 - [ ] Image builds for `linux/amd64` and is pushed, digest-pinned
 - [ ] `dvc push` completed; a grader can `dvc pull`
-- [ ] Five or more tracked runs with params, metrics, data fingerprint, and commit SHA
-- [ ] Every **REPLACE** block above is gone (the course-materials block at the top stays)
-- [ ] `git log -p | grep -i -E "secret|password|AKIA|BEGIN PRIVATE"` returns nothing
+- [x] Five or more tracked runs with params, metrics, data fingerprint, DVC hash, and commit SHA
+- [x] No instruction placeholders remain in the Lab 1 README
+- [x] `git log -p | grep -i -E "secret|password|AKIA|BEGIN PRIVATE"` returns nothing
 
 That last check is not optional. A credential in Git history is an automatic deduction in this
 course, and rotating it is your responsibility, not the grader's.

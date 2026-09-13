@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -33,6 +34,18 @@ def git_commit() -> str:
         return "unknown"
 
 
+def dvc_data_version() -> str:
+    """Return the content hash recorded by DVC for the raw dataset."""
+    descriptor = config.REPO_ROOT / "data" / "raw.dvc"
+    if not descriptor.exists():
+        return "unavailable"
+    for line in descriptor.read_text().splitlines():
+        match = re.match(r"^\s*(?:-\s*)?(?:md5|etag|checksum):\s*([0-9a-fA-F]+(?:\.dir)?)\s*$", line)
+        if match:
+            return match.group(1)
+    return "unavailable"
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ITCS355 Lab 1 — reproducible training")
     p.add_argument("--n-estimators", type=int, default=200)
@@ -53,6 +66,7 @@ def main() -> None:
 
     df = data.load_raw(cfg.raw_path)
     fingerprint = data.data_fingerprint(cfg.raw_path)
+    dvc_version = dvc_data_version()
     train_df, val_df, test_df = data.split(df, seed=seed)
 
     mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
@@ -65,11 +79,13 @@ def main() -> None:
             "min_samples_leaf": args.min_samples_leaf,
             "seed": seed,
             "n_features": len(data.FEATURES),
+            "dvc_data_version": dvc_version,
         })
         # Provenance. This is what makes the metric traceable.
         mlflow.set_tags({
             "git_commit": git_commit(),
             "data_fingerprint": fingerprint,
+            "dvc_data_version": dvc_version,
             "split_strategy": "group_by_machine_id",
             "n_train_rows": len(train_df),
             "n_val_rows": len(val_df),
@@ -93,11 +109,11 @@ def main() -> None:
         mlflow.log_metrics(metrics)
         mlflow.sklearn.log_model(model, name="model")
 
-        print(json.dumps({"seed": seed, "data_fingerprint": fingerprint, **metrics}, indent=2))
+        print(json.dumps({"seed": seed, "data_fingerprint": fingerprint, "dvc_data_version": dvc_version, **metrics}, indent=2))
         if args.metrics_out:
             args.metrics_out.parent.mkdir(parents=True, exist_ok=True)
             args.metrics_out.write_text(json.dumps(
-                {"seed": seed, "data_fingerprint": fingerprint, **metrics}, indent=2))
+                {"seed": seed, "data_fingerprint": fingerprint, "dvc_data_version": dvc_version, **metrics}, indent=2))
 
 
 if __name__ == "__main__":
