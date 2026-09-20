@@ -15,12 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import mlflow
-import mlflow.sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from cloudlayer.factory import get_adapter
-from src import config, costs, data, seeds
+from src import config, costs, data, mlflow_compat, seeds
 from src.train import dvc_data_version, git_commit
 
 
@@ -120,7 +119,7 @@ def _local_trial(
             "image_digest": "local-development",
             "split_strategy": "group_by_machine_id",
         })
-        mlflow.sklearn.log_model(model, name="model")
+        mlflow_compat.log_sklearn_model(model)
         return {
             "run_id": run.info.run_id,
             "training_job_id": f"local-trial-{index:02d}",
@@ -208,7 +207,25 @@ def _remote_trial(
             result["run_id"] = row["run_id"]
             result["val_roc_auc"] = float(row.get("metrics.val_roc_auc", result.get("val_roc_auc", 0.0)))
             result["test_roc_auc"] = float(row.get("metrics.test_roc_auc", result.get("test_roc_auc", 0.0)))
-    result.update({**params, "training_job_id": job_id, "instance_type": instance, "spot": spot})
+    result.update({
+        **params,
+        "training_job_id": job_id,
+        "image_uri": image_uri,
+        "image_digest": image_digest,
+        "instance_type": instance,
+        "spot": spot,
+    })
+    if result.get("run_id") and result.get("cost_thb") is not None:
+        tracking_client = mlflow.MlflowClient()
+        tracking_client.log_metric(
+            str(result["run_id"]), "cost_thb", float(result["cost_thb"])
+        )
+        if result.get("billable_seconds") is not None:
+            tracking_client.log_metric(
+                str(result["run_id"]),
+                "billable_seconds",
+                float(result["billable_seconds"]),
+            )
     return result
 
 
@@ -225,6 +242,7 @@ def main() -> None:
         raise SystemExit(f"search space contains only {len(candidates)} distinct candidates")
 
     cfg = config.load(strict=False)
+    args.instance = costs.resolve_instance(cfg.provider, args.instance)
     seed = seeds.set_all(args.seed)
     df = data.load_raw(cfg.raw_path)
     fingerprint = data.data_fingerprint(cfg.raw_path)

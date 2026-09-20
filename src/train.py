@@ -14,11 +14,10 @@ from pathlib import Path
 
 import joblib
 import mlflow
-import mlflow.sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from src import config, data, seeds
+from src import config, data, mlflow_compat, seeds
 
 
 def git_commit() -> str:
@@ -182,7 +181,7 @@ def main() -> None:
         if args.estimated_cost_thb is not None:
             metrics["cost_thb"] = float(args.estimated_cost_thb)
         mlflow.log_metrics(metrics)
-        mlflow.sklearn.log_model(model, name="model")
+        mlflow_compat.log_sklearn_model(model)
 
         if args.model_out:
             args.model_out.parent.mkdir(parents=True, exist_ok=True)

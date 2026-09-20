@@ -34,11 +34,25 @@ PRICE_TABLE: dict[str, dict[str, float]] = {
 SPOT_FACTOR = 0.30
 DEFAULT_UTILISATIONS = (0.05, 0.25, 0.80)
 
+INSTANCE_ALIASES: dict[str, dict[str, str]] = {
+    "azure": {
+        # Keep the Makefile's AWS-shaped default usable when the provider is switched.
+        "ml.m5.large": "Standard_DS3_v2",
+        "ml.m5.xlarge": "Standard_F4s_v2",
+    },
+}
+
+
+def resolve_instance(provider: str, instance: str) -> str:
+    """Resolve a cross-provider default to the concrete provider instance type."""
+    return INSTANCE_ALIASES.get(provider.lower(), {}).get(instance, instance)
+
 
 def hourly_rate(provider: str, instance: str, spot: bool = False) -> float:
     table = PRICE_TABLE.get(provider.lower())
     if table is None:
         raise KeyError(f"No price table for provider {provider!r}. Add it to src/costs.py.")
+    instance = resolve_instance(provider, instance)
     if instance not in table:
         raise KeyError(
             f"No rate for {instance!r} on {provider}. Known: {sorted(table)}. "

@@ -70,7 +70,22 @@ def main() -> int:
         "metric_test": f"{metric_test:.8f}",
     }
 
-    model_version = mlflow.register_model(f"runs:/{args.run_id}/model", model_name)
+    if cfg.provider == "azure":
+        # Azure ML's MLflow registry does not expose MLflow 3's logged-models
+        # search endpoint. Its legacy model-version endpoint accepts the Azure
+        # artifact URI for the run's uploaded model directory.
+        existing = [
+            version for version in client.search_model_versions(f"name='{model_name}'")
+            if version.run_id == args.run_id
+        ]
+        model_version = existing[0] if existing else client.create_model_version(
+            name=model_name,
+            source=f"azureml://artifacts/ExperimentRun/dcid.{args.run_id}/model",
+            run_id=args.run_id,
+            description="ITCS355 Lab 2 selected model with complete code/data/job/image lineage.",
+        )
+    else:
+        model_version = mlflow.register_model(f"runs:/{args.run_id}/model", model_name)
     version = str(model_version.version)
     for key in LINEAGE_FIELDS:
         client.set_model_version_tag(model_name, version, key, lineage[key])

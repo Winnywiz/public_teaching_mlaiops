@@ -1,35 +1,35 @@
 # Lab 2 — Run comparison
 
-Experiment `itcs355-lab2` · 12 trials · total spend 0.0014 THB
+Experiment `itcs355-lab2` · 12 trials · total spend 1.5727 THB
 
 `thb_per_point` is cost per percentage point of validation ROC-AUC above the worst trial.
 
-| run_id   |   val_roc_auc |   cost_thb |   thb_per_point |   n_estimators |   max_depth |   min_samples_leaf |     seed | training_job_id   |
-|:---------|--------------:|-----------:|----------------:|---------------:|------------:|-------------------:|---------:|:------------------|
-| 3091d8f8 |        0.8426 |     0.0001 |          0      |            100 |           4 |                  5 | 20260101 | local-trial-01    |
-| b603eec3 |        0.8424 |     0.0001 |          0.0001 |            100 |           4 |                  1 | 20260101 | local-trial-00    |
-| 8959f6ac |        0.8411 |     0.0002 |          0.0001 |            300 |           4 |                  5 | 20260101 | local-trial-07    |
-| 21b5046d |        0.8404 |     0.0002 |          0.0001 |            300 |           4 |                  1 | 20260101 | local-trial-06    |
-| 65547595 |        0.8397 |     0.0001 |          0      |            100 |           8 |                  5 | 20260101 | local-trial-03    |
-| 1f4a6a1d |        0.8377 |     0.0001 |          0.0001 |            300 |           8 |                  5 | 20260101 | local-trial-09    |
-| 3dee8c02 |        0.8354 |     0.0002 |          0.0002 |            300 |          12 |                  5 | 20260101 | local-trial-11    |
-| aa056ccc |        0.8338 |     0.0002 |          0.0002 |            300 |           8 |                  1 | 20260101 | local-trial-08    |
-| dbeac59f |        0.8322 |     0.0001 |          0.0001 |            100 |          12 |                  5 | 20260101 | local-trial-05    |
-| 9e710a7e |        0.8312 |     0.0001 |          0.0001 |            100 |           8 |                  1 | 20260101 | local-trial-02    |
-| fd199559 |        0.8268 |     0.0001 |          0.0019 |            100 |          12 |                  1 | 20260101 | local-trial-04    |
-| 29f547f3 |        0.8265 |     0.0002 |       1535.12   |            300 |          12 |                  1 | 20260101 | local-trial-10    |
+| run_id   |   val_roc_auc |   cost_thb |   thb_per_point |   n_estimators |   max_depth |   min_samples_leaf |     seed | training_job_id                          |
+|:---------|--------------:|-----------:|----------------:|---------------:|------------:|-------------------:|---------:|:-----------------------------------------|
+| funny_be |        0.8426 |     0.1102 |      0.0683     |            100 |           4 |                  5 | 20260101 | itcs355-6688040-lab2-trial-01-1789907661 |
+| frank_ch |        0.8424 |     0.3398 |      0.2126     |            100 |           4 |                  1 | 20260101 | itcs355-6688040-lab2-trial-00-1789907289 |
+| frosty_s |        0.8411 |     0.117  |      0.08       |            300 |           4 |                  5 | 20260101 | itcs355-6688040-lab2-trial-07-1789908301 |
+| frank_be |        0.8404 |     0.1125 |      0.0809     |            300 |           4 |                  1 | 20260101 | itcs355-6688040-lab2-trial-06-1789908192 |
+| sad_matc |        0.8397 |     0.1102 |      0.0833     |            100 |           8 |                  5 | 20260101 | itcs355-6688040-lab2-trial-03-1789907911 |
+| musing_b |        0.8377 |     0.1125 |      0.1001     |            300 |           8 |                  5 | 20260101 | itcs355-6688040-lab2-trial-09-1789908537 |
+| polite_s |        0.8354 |     0.1148 |      0.1288     |            300 |          12 |                  5 | 20260101 | itcs355-6688040-lab2-trial-11-1789908729 |
+| placid_c |        0.8338 |     0.1148 |      0.1569     |            300 |           8 |                  1 | 20260101 | itcs355-6688040-lab2-trial-08-1789908429 |
+| plum_spa |        0.8322 |     0.108  |      0.1893     |            100 |          12 |                  5 | 20260101 | itcs355-6688040-lab2-trial-05-1789908105 |
+| dreamy_b |        0.8312 |     0.108  |      0.2285     |            100 |           8 |                  1 | 20260101 | itcs355-6688040-lab2-trial-02-1789907747 |
+| khaki_ha |        0.8268 |     0.1102 |      2.9988     |            100 |          12 |                  1 | 20260101 | itcs355-6688040-lab2-trial-04-1789908017 |
+| strong_b |        0.8265 |     0.1148 |      1.1475e+06 |            300 |          12 |                  1 | 20260101 | itcs355-6688040-lab2-trial-10-1789908641 |
 
 ## Selected model
 
-- Full MLflow run ID: `3091d8f88b5b4409983473f40a127774`
+- Full MLflow run ID: `funny_berry_bk66p02czt`
 - Validation ROC-AUC: `0.84259990`
 - Test ROC-AUC: `0.85328579`
-- Training job: `local-trial-01`
+- Training job: `itcs355-6688040-lab2-trial-01-1789907661`
 - Seed variance runs: `5`
 
 ## Justification (under 200 words)
 
-I selected run 3091d8f8 (100 trees, depth 4, leaf 5) with validation ROC-AUC 0.8426. The selected run is also the highest-scoring run, but its margin is shown against the seed variance rather than treated as proof by itself. Five-seed variance for this configuration is std=0.0139, range 0.8364–0.8736. Its measured or estimated training cost is 0.0001 THB and retraining it 30 times per month would cost about 0.0020 THB. This choice could be wrong if future machines operate outside the grouped hold-out distribution; the model may then rank risk poorly despite a clean offline score.
+I selected run funny_be (100 trees, depth 4, leaf 5) with validation ROC-AUC 0.8426. The selected run is also the highest-scoring run, but its margin is shown against the seed variance rather than treated as proof by itself. Five-seed variance for this configuration is std=0.0141, range 0.8426–0.8781. Its measured or estimated training cost is 0.1103 THB and retraining it 30 times per month would cost about 3.3075 THB. This choice could be wrong if future machines operate outside the grouped hold-out distribution; the model may then rank risk poorly despite a clean offline score.
 
 ## Registration and promotion
 
@@ -37,4 +37,4 @@ Register the selected run with `scripts/register_model.py`; it writes all eight 
 
 ## Cost note
 
-The study budget is 150 THB. The reported total is 0.0014 THB. Cloud runs must use discounted compute and replace estimates with the provider billing figure before submission.
+The study budget is 150 THB. The reported total is 1.5727 THB. Low-priority quota was unavailable in this Azure subscription, so the study used dedicated scale-to-zero compute. Reconcile the provider-duration cost with the Azure billing portal before submission.

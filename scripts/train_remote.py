@@ -55,6 +55,7 @@ def main() -> int:
         raise SystemExit("--image-uri must be digest-pinned as repository@sha256:...")
 
     cfg = config.load(strict=True)
+    args.instance = costs.resolve_instance(cfg.provider, args.instance)
     adapter = get_adapter(cfg)
     seed = seeds.set_all(args.seed)
     raw_path = cfg.raw_path

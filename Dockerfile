@@ -2,7 +2,7 @@
 #
 # The manifest-list digest pins the complete multi-architecture base. The build command
 # selects linux/amd64, so the same immutable reference resolves to the intended platform.
-FROM python@sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534 AS builder
+FROM python@sha256:4d1caded1f729ae443eb803f26ffde7b61e696aeaef62f099abb6dd6b14257c7 AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -15,7 +15,7 @@ COPY requirements.txt ./
 RUN pip install --prefix=/install --require-hashes -r requirements.txt
 
 
-FROM python@sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534 AS runtime
+FROM python@sha256:4d1caded1f729ae443eb803f26ffde7b61e696aeaef62f099abb6dd6b14257c7 AS runtime
 
 # Non-root. A training container has no reason to run as root, and graders check.
 RUN useradd --create-home --uid 10001 runner

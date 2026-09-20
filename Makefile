@@ -7,7 +7,7 @@ TAG   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 PLATFORM ?= linux/amd64
 SEED ?= 20260101
 INSTANCE ?= ml.m5.large
-TUNE_FLAGS ?= --spot
+TUNE_FLAGS ?=
 IMAGE_URI ?=
 MODEL_REGISTRY_NAME ?= itcs355
 
@@ -56,7 +56,7 @@ verify: ## Check the produced metric against the README claim
 
 teardown: ## Delete every resource tagged course=itcs355 for this lab
 	python -c "from src import config; from cloudlayer.factory import get_adapter; \
-	cfg=config.load(); print(get_adapter(cfg).teardown(cfg.tags(1)))"
+	cfg=config.load(); print(get_adapter(cfg).teardown(cfg.tags(2)))"
 
 clean: ## Remove local artifacts
 	rm -rf mlruns mlartifacts mlflow.db reports/metrics.json .pytest_cache

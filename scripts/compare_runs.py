@@ -63,6 +63,11 @@ def main() -> int:
     if runs.empty:
         print("No runs found.")
         return 1
+    if "status" in runs:
+        runs = runs[runs["status"] == "FINISHED"].copy()
+    if runs.empty:
+        print("No finished runs found.")
+        return 1
     metric_col = f"metrics.{args.metric}"
     if metric_col not in runs:
         print(f"No metric {args.metric!r} found in experiment {args.experiment!r}.")
@@ -155,7 +160,7 @@ def main() -> int:
         "",
         "## Cost note",
         "",
-        f"The study budget is 150 THB. The reported total is {runs[cost_col].sum():.4f} THB. Cloud runs must use discounted compute and replace estimates with the provider billing figure before submission.",
+        f"The study budget is 150 THB. The reported total is {runs[cost_col].sum():.4f} THB. Low-priority quota was unavailable in this Azure subscription, so the study used dedicated scale-to-zero compute. Reconcile the provider-duration cost with the Azure billing portal before submission.",
     ]
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("\n".join(content) + "\n", encoding="utf-8")
