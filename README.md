@@ -33,7 +33,7 @@ make compare
 ```
 
 The checked-in comparison contains 12 distinct trials varying `n_estimators`, `max_depth`, and
-`min_samples_leaf`. The local evidence selected run `af5316d7` with validation ROC-AUC `0.8426`
+`min_samples_leaf`. The local evidence selected run `3091d8f8` with validation ROC-AUC `0.8426`
 and test ROC-AUC `0.8533`. Five seed runs for that configuration measured validation ROC-AUC
 standard deviation `0.0139` and range `0.8364–0.8736`.
 
@@ -42,7 +42,7 @@ trial table, cost-per-point ranking, seed variance, training/monthly retraining 
 choice, and the required failure mode. The local study estimated cost from discounted AWS rates;
 it did not create a cloud job.
 
-The final local evidence was generated from committed code `670895cc360347621a98e655adb3222b5545e11b`
+The final local evidence was generated from committed code `18e9dbb8e21b3c315698ba16c074a12ed9f24627`
 using an isolated SQLite tracking database. The selected local registry entry is
 `itcs355-lab2-local` version `1`; [`reports/lab2-registry.md`](reports/lab2-registry.md) records
 its lineage and reload result.

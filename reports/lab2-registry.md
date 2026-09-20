@@ -1,7 +1,7 @@
 # Lab 2 registry evidence
 
 This evidence was generated after implementation commit
-`670895cc360347621a98e655adb3222b5545e11b`.
+`18e9dbb8e21b3c315698ba16c074a12ed9f24627`.
 
 The local MLflow tracking database was isolated at `reports/lab2-final.db`; it is ignored and is
 not a submission artifact. The provider registry path is implemented in `cloudlayer/aws.py`, but
@@ -15,7 +15,7 @@ the local run below does not claim that an AWS model package was created.
 | Version | `1` |
 | URI | `models:/itcs355-lab2-local/1` |
 | Stage/alias | `Staging` / `staging` |
-| MLflow run | `af5316d73b0147af90cab83d15f732d2` |
+| MLflow run | `3091d8f88b5b4409983473f40a127774` |
 | Training job | `local-trial-01` |
 | Validation ROC-AUC | `0.84259990` |
 | Test ROC-AUC | `0.85328579` |
@@ -24,9 +24,9 @@ the local run below does not claim that an AWS model package was created.
 
 | Tag | Value |
 |---|---|
-| `git_commit` | `670895cc360347621a98e655adb3222b5545e11b` |
+| `git_commit` | `18e9dbb8e21b3c315698ba16c074a12ed9f24627` |
 | `data_version` | `1c886b512c8a5c9bf723da1cd119fc80.dir` |
-| `mlflow_run_id` | `af5316d73b0147af90cab83d15f732d2` |
+| `mlflow_run_id` | `3091d8f88b5b4409983473f40a127774` |
 | `training_job_id` | `local-trial-01` |
 | `image_digest` | `local-development` |
 | `seed` | `20260101` |

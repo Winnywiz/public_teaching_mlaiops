@@ -1,8 +1,8 @@
 # Lab 2 study evidence
 
-Implementation commit: `670895cc360347621a98e655adb3222b5545e11b`  
-Experiment: `itcs355-lab2`  
-Study mode: local dry run using the discounted AWS rate table; no cloud job was created.  
+Implementation commit: `18e9dbb8e21b3c315698ba16c074a12ed9f24627`
+Experiment: `itcs355-lab2`
+Study mode: local dry run using the discounted AWS rate table; no cloud job was created.
 Budget: `150 THB`  
 Recorded estimate: `0.0014 THB`
 
