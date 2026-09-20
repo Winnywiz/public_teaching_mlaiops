@@ -84,8 +84,9 @@ These steps need user-owned cloud resources and credentials:
    make image-push
    ```
 
-4. Configure a DVC object-storage remote and run `dvc push`. The training job must read the data
-   prefix from object storage rather than from the laptop.
+4. Configure a DVC object-storage remote under the configured `BLOB_URI`, run `dvc add data/raw`
+   to populate the local DVC cache, then run `dvc push`. The training job must read the data prefix
+   from object storage rather than from the laptop.
 5. Run the discounted managed study and record actual billing rather than the local estimate:
 
    ```bash
