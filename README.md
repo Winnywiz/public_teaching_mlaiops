@@ -33,7 +33,7 @@ make compare
 ```
 
 The checked-in comparison contains 12 distinct trials varying `n_estimators`, `max_depth`, and
-`min_samples_leaf`. The local evidence selected run `9970c9c3` with validation ROC-AUC `0.8426`
+`min_samples_leaf`. The local evidence selected run `af5316d7` with validation ROC-AUC `0.8426`
 and test ROC-AUC `0.8533`. Five seed runs for that configuration measured validation ROC-AUC
 standard deviation `0.0139` and range `0.8364–0.8736`.
 
@@ -41,6 +41,11 @@ The comparison is in [`reports/lab2-comparison.md`](reports/lab2-comparison.md).
 trial table, cost-per-point ranking, seed variance, training/monthly retraining cost, the model
 choice, and the required failure mode. The local study estimated cost from discounted AWS rates;
 it did not create a cloud job.
+
+The final local evidence was generated from committed code `670895cc360347621a98e655adb3222b5545e11b`
+using an isolated SQLite tracking database. The selected local registry entry is
+`itcs355-lab2-local` version `1`; [`reports/lab2-registry.md`](reports/lab2-registry.md) records
+its lineage and reload result.
 
 ---
 
@@ -54,7 +59,7 @@ it did not create a cloud job.
 | Comparison | `scripts/compare_runs.py` writes the table and a sub-200-word justification instead of leaving a grading placeholder. |
 | Registry | `scripts/register_model.py` registers the MLflow model and writes all eight lineage fields; `cloudlayer/aws.py` also supports SageMaker Model Package Groups. |
 | Promotion | MLflow staging/alias promotion is implemented locally; AWS promotion maps to an approved SageMaker model package. |
-| Reload | `scripts/reload_check.py` loads `models:/<name>/<version>` from the registry and scores five held-out rows. |
+| Reload | `scripts/reload_check.py` loads `models:/MODEL_REGISTRY_NAME/VERSION` from the registry and scores five held-out rows. |
 
 The eight registry fields are `git_commit`, `data_version`, `mlflow_run_id`, `training_job_id`,
 `image_digest`, `seed`, `metric_val`, and `metric_test`. The staging owner should be a model owner
