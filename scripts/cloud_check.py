@@ -45,11 +45,20 @@ def main() -> int:
     print()
     cli = CLI_FOR.get(provider)
     if cli:
-        found = shutil.which(cli) is not None
+        cli_path = shutil.which(cli)
+        found = cli_path is not None
         results.append(line(f"{cli} on PATH", found, "" if found else f"install the {provider} CLI"))
         if found:
             try:
-                subprocess.run(IDENTITY_CMD[provider], capture_output=True, check=True, timeout=30)
+                # On Windows, Azure CLI is commonly installed as az.cmd rather than
+                # az.exe. Run the resolved executable so the check matches the PATH
+                # check above.
+                subprocess.run(
+                    [cli_path, *IDENTITY_CMD[provider][1:]],
+                    capture_output=True,
+                    check=True,
+                    timeout=30,
+                )
                 results.append(line("credentials", True, "identity resolved"))
             except Exception as exc:
                 results.append(line("credentials", False, f"{type(exc).__name__} — run the login command"))

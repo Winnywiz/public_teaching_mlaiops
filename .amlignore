@@ -1,0 +1,11 @@
+.git/
+.dvc/cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+mlruns/
+mlartifacts/
+reports/
+mlflow.db
+cloud.env
+data/raw/

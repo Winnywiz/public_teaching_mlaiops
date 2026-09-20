@@ -1,4 +1,4 @@
-# ITCS355 Lab 1 — Reproducible Training
+# ITCS355 Lab 2 — Experiment Tracking and Model Registry
 
 > **Course materials live in [`course/`](course/README.md)** — syllabus, slides, the faculty
 > specification, all five lab handouts, and the project brief. Every document is Markdown and
@@ -6,136 +6,141 @@
 > [portability reference](course/reference/cloud-portability-reference.md).
 > Keep this block when you edit the rest of this file; it is not part of the Lab 1 deliverable.
 
-Predicting machine failure within 7 days from sensor readings. The model is not the point;
-whether a stranger can reproduce it is.
+This checkout is a separate Lab 2 repository. It carries the completed Lab 1 reproducibility
+foundation and adds a resumable, budgeted study, comparison report, lineage-aware registration,
+staging promotion, and registry reload check.
 
-> **This README is graded.** A grader with Docker and nothing else from your setup runs one
-> command and compares the result against the claim below. Keep the claim and execution
-> instructions synchronized before submitting.
+The selected cloud adapter is Azure. The storage, DVC remote, MLflow endpoint, digest-pinned image,
+12-trial managed study, model registry, promotion, and registry reload are complete. Serverless and
+low-priority Azure ML quotas are zero, so the study used the available dedicated `Standard_DS3_v2`
+cluster with scale-to-zero. The exact quota and permission evidence is recorded in
+[`reports/lab2-cloud-status.md`](reports/lab2-cloud-status.md).
 
 ---
 
-## Reproduce
+## Local verification
+
+The Lab 1 smoke test remains:
 
 ```bash
 make reproduce
+python scripts/verify_metric.py
 ```
 
-expected test_roc_auc: 0.848 ± 0.010
-
-Runtime: about 40 seconds on 4 cores. No cloud account or credentials needed for this command —
-that is deliberate, and it is why a grader can run it.
-
-The claim is intentionally kept to three decimals with a tolerance of 0.010. `make verify` parses
-this line and compares it with the metric produced by the pinned-seed container run. The tolerance
-covers the observed cross-platform floating-point variation, not an uncontrolled change of seed.
-
----
-
-## The problem
-
-240 machines, 25 readings each, 6 sensor features, binary target `failed_within_7d` with a
-positive rate near 12%.
-
-Machines have persistent characteristics — a hot-running machine reads hot in every row. So the
-train/validation/test split is **grouped by `machine_id`**: every reading from one machine lands
-in exactly one partition. Splitting row-wise instead lets the model memorise the machine and
-reports a validation score that will never survive production. `tests/test_data.py` asserts this
-property holds, and Lab 4 turns it into a CI gate.
-
-Bringing your own dataset is allowed. To do that, update `scripts/make_dataset.py`, the schema in
-`src/data.py`, and keep every test passing.
-
----
-
-## Layout
-
-```
-src/          Layer 1 — provider-neutral. No SDKs, no bucket names, no absolute paths.
-cloudlayer/   Layer 3 — the only place a provider SDK may be imported.
-scripts/      Dataset generation, cloud check, portability audit, metric verification.
-tests/        Data contract tests and split property tests.
-```
-
-`src/config.py` is the single point of environment knowledge. Everything else reads from it.
-`make portability-audit` enforces the rule; it fails the build if a provider string appears in
-`src/` or `tests/`.
-
----
-
-## Setup
+The Lab 2 local study uses the same MLflow tracking and checkpoint logic as the managed study:
 
 ```bash
-cp cloud.env.example cloud.env      # fill in, never commit
-make setup
-make cloud-check                    # eight slots, all PASS
-make data                           # generate the dataset
-make test                           # 10 tests, all passing
+make tune
+make compare
 ```
 
-Post your `make cloud-check` output in the course channel before Session 1.
+The checked-in comparison contains 12 distinct Azure ML trials varying `n_estimators`, `max_depth`,
+and `min_samples_leaf`. It selected run `funny_berry_bk66p02czt` with validation ROC-AUC
+`0.84259990` and test ROC-AUC `0.85328579`. Five seed runs for that configuration measured
+validation ROC-AUC standard deviation `0.0141` and range `0.8426–0.8781`.
+
+The comparison is in [`reports/lab2-comparison.md`](reports/lab2-comparison.md). It contains the
+trial table, cost-per-point ranking, seed variance, training/monthly retraining cost, the model
+choice, and the required failure mode. The cloud study's recorded managed-job duration cost is
+`1.57275 THB`, below the `150 THB` budget. It is a provider-duration calculation; the Azure billing
+page remains the source of truth for the invoice. Because the low-priority quota is zero, this is
+dedicated-compute evidence rather than discounted-compute evidence.
+
+The final local evidence was generated from committed code `18e9dbb8e21b3c315698ba16c074a12ed9f24627`
+using an isolated SQLite tracking database. The selected local registry entry is
+`itcs355-lab2-local` version `1`; [`reports/lab2-registry.md`](reports/lab2-registry.md) records
+its lineage and reload result.
+
+The Azure image was built for `linux/amd64` and pushed by digest as
+`itcs3556688040.azurecr.io/itcs355@sha256:8d1de4c30566664467d3dfbf658c40e8d6d977f2d61dd9ba4e8bda0cdc6600cb`.
+The DVC remote is the Azure Blob prefix `azure://itcs355/lab2/dvc`, and its push completed with
+two objects transferred.
 
 ---
 
-## Lab 1 implementation
+## Lab 2 implementation
 
-The Lab 1 decisions are implemented in this checkout:
-
-| Where | What |
+| Area | Implementation |
 |---|---|
-| `requirements.txt` | Hash-pinned output generated from `requirements.in` |
-| `Dockerfile` | Multi-stage, non-root, digest-pinned base and hash-enforced install |
-| `cloudlayer/aws.py` | S3 upload/download and ECR login, push, tagging, and digest return |
-| `src/train.py` | Seed, Git SHA, raw fingerprint, DVC hash, metrics, and model artifact logging |
+| Managed training | `cloudlayer/azure.py` submits and polls Azure ML command jobs with a digest-pinned image, Blob input prefix, checkpoint output, compute target, tags, and model artifact. The configured target scales from 0 to 1 node. |
+| Job context | `.amlignore` excludes local MLflow history, reports, caches, and credentials before Azure ML packages the command-job code. |
+| Resumption | `src/tune.py` writes an atomic checkpoint before submission, records the job ID, and waits on an in-flight job after interruption. |
+| Tracking | `src/train.py` logs hyperparameters, validation/test metrics, duration, cost, seed, Git SHA, data fingerprint, DVC version, training job ID, and image digest. |
+| Comparison | `scripts/compare_runs.py` writes the table and a sub-200-word justification instead of leaving a grading placeholder. |
+| Registry | `scripts/register_model.py` registers the MLflow model and writes all eight lineage fields; the Azure adapter also registers a versioned Azure ML custom model. |
+| Promotion | MLflow staging/alias promotion is implemented locally; Azure promotion records an approved staging tag on the Azure ML model version. |
+| Reload | `scripts/reload_check.py` loads `models:/MODEL_REGISTRY_NAME/VERSION` from the registry and scores five held-out rows. |
 
-Then:
-
-```bash
-make image-push        # image reaches your registry, digest-pinned
-dvc init && dvc remote add -d storage ${BLOB_URI}/dvc
-dvc add data/raw && dvc push
-```
-
-Run five or more tracked runs varying something meaningful — not five identical runs with
-different seeds.
+The eight registry fields are `git_commit`, `data_version`, `mlflow_run_id`, `training_job_id`,
+`image_digest`, `seed`, `metric_val`, and `metric_test`. The staging owner should be a model owner
+or release approver, not the person who trained the candidate alone. They should require the
+comparison, seed-variance, data-version, image-digest, cost, and reload evidence before approving.
 
 ---
 
-## Reproducibility trade-off
+## Cloud run required before submission
 
-Three things pin your build: hashed dependencies, a digest-pinned base image, and controlled
-seeds. Under real time pressure you would keep some and drop others.
+These steps need user-owned cloud resources and credentials:
 
-I would drop dependency hashes first, while keeping the digest pin and seed control. The version
-pins would still constrain the dependency graph and the digest would keep the OS and interpreter
-fixed, so the build should continue to work. What breaks is supply-chain reproducibility: a package
-index could serve a different wheel for the same version, changing code or introducing a vulnerability.
-The next improvement would be restoring hashes before changing model or data behavior, because that
-failure is silent and difficult to diagnose.
+1. Sign in with `az login`, install the Azure ML CLI extension with `az extension add -n ml`, and
+   confirm `python scripts/cloud_check.py` reports all checks passing. The configured `cloud.env`
+   is local and ignored; never paste credentials into source files or Docker build arguments.
+2. Use the existing Azure ML workspace, Blob Storage container, and ACR named in `cloud.env`. The
+   submitting identity needs permission to read/write the storage data and create/describe jobs and
+   model versions.
+3. Start Docker, build for `linux/amd64`, push the image, and record the returned digest:
+
+   ```bash
+   make image-push
+   ```
+
+4. Configure a DVC object-storage remote under the configured `BLOB_URI`, run `dvc add data/raw`
+   to populate the local DVC cache, then run `dvc push`. The training job must read the data prefix
+   from object storage rather than from the laptop.
+5. The managed study was run with the available dedicated quota. If low-priority quota is later
+   granted, rerun the same checkpointed study with the discounted target; otherwise retain the
+   documented dedicated fallback and confirm the invoice in Azure:
+
+   ```bash
+   make tune INSTANCE=Standard_DS3_v2 IMAGE_URI="$TRAINING_IMAGE_URI" \
+     TUNE_FLAGS="--remote"
+   make compare
+   ```
+
+6. The selected run is already registered and promoted: MLflow model `itcs355-6688040` version `1`
+   and Azure ML custom model version `2`. A model owner or release approver should review the
+   comparison, seed variance, data version, image digest, cost, and reload result before repeating
+   that promotion in a real release. The equivalent command shape is:
+
+   ```bash
+   python scripts/register_model.py --run-id "$SELECTED_RUN_ID" \
+     --name "$MODEL_REGISTRY_NAME" --training-job-id "$TRAINING_JOB_ID" \
+     --image-uri "$TRAINING_IMAGE_URI" --image-digest "$IMAGE_DIGEST" \
+     --provider-model-uri "$MODEL_ARTIFACT_URI" --stage Staging
+   python scripts/reload_check.py --name "$MODEL_REGISTRY_NAME" --version "$VERSION"
+   make cost EST="$ESTIMATE_THB" ACT="$ACTUAL_THB" RPS="$THROUGHPUT_RPS" INSTANCE=Standard_DS3_v2
+   make teardown
+   ```
+
+The first managed submission may fail because submit-time and run-time identities are different.
+Record the specific missing permission, fix only that permission, then repeat. A successful local
+dry run cannot substitute for the managed-job and billing evidence.
 
 ---
 
-## Notes for the grader
+## Evidence checklist
 
-This checkout uses the AWS adapter. `make reproduce` is intentionally cloud-free: it runs from the
-checked-in raw data and the pinned Docker image. Cloud completion still requires filling `cloud.env`,
-granting the AWS identity access to the configured S3 prefix and ECR repository, then running
-`make image-push`, `dvc push`, and the five-run MLflow study. No credentials are committed or copied
-into an image layer.
-
----
-
-## Checklist before you submit
-
-- [ ] `make reproduce` works from a fresh clone, on a machine that is not yours
-- [x] `make verify` passes against the final claim line
-- [x] `make test` — all tests pass
-- [x] `make portability-audit` — clean
-- [ ] Image builds for `linux/amd64` and is pushed, digest-pinned
-- [ ] `dvc push` completed; a grader can `dvc pull`
-- [x] Five or more tracked runs with params, metrics, data fingerprint, DVC hash, and commit SHA
-- [x] No instruction placeholders remain in the Lab 1 README
-- [x] `git log -p | grep -i -E "secret|password|AKIA|BEGIN PRIVATE"` returns nothing
-
-That last check is not optional. A credential in Git history is an automatic deduction in this
-course, and rotating it is your responsibility, not the grader's.
+- [x] Lab 1 base image, dependency lock, DVC metadata, grouped split, and tracking foundation
+- [x] 12-trial search space with three meaningful hyperparameters
+- [x] Atomic checkpoint and in-flight job ID support for interruption/resumption
+- [x] Comparison artifact and justification under 200 words
+- [x] Five-seed variance evidence for the selected configuration
+- [x] Local MLflow model version with all eight lineage fields
+- [x] Local staging promotion and registry reload check
+- [x] 12+ trials completed on managed compute with atomic checkpoint/resume
+- [ ] 12+ trials completed on discounted managed compute (low-priority quota is currently zero)
+- [ ] Actual Azure billing export/portal confirmation under 150 THB
+- [x] Image pushed by digest and DVC remote push completed
+- [x] Cloud registry version promoted and reloaded from the MLflow/Azure ML registry
+- [x] Teardown performed: tagged jobs archived and tagged compute deleted
+- [x] No `cloud.env` or credentials in Git history
