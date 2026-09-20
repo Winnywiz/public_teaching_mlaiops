@@ -13,6 +13,10 @@ mlflow.db
 
 reports/*.json
 reports/*.joblib
+reports/tune_checkpoint.json
+reports/remote-training.json
+reports/registered-model.json
+outputs/
 __pycache__/
 *.pyc
 .pytest_cache/

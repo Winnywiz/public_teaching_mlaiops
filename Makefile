@@ -1,14 +1,18 @@
-# ITCS355 Lab 1
-# `make reproduce` is the one command a grader runs. Keep it working.
+# ITCS355 Labs 1–2
+# `make reproduce` remains the Lab 1 local smoke test; `make tune` is the Lab 2 study.
 
 SHELL := /bin/bash
 IMAGE ?= itcs355-lab1
 TAG   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 PLATFORM ?= linux/amd64
 SEED ?= 20260101
+INSTANCE ?= ml.m5.large
+TUNE_FLAGS ?= --spot
+IMAGE_URI ?=
+MODEL_REGISTRY_NAME ?= itcs355
 
 .PHONY: help setup cloud-check data test portability-audit train image image-push reproduce verify clean teardown \
-        tune compare reload-check serve serve-image loadtest drift inject-drift pipeline cost swap-check llm-eval llm-gate
+        tune train-remote compare register-model reload-check serve serve-image loadtest drift inject-drift pipeline cost swap-check llm-eval llm-gate
 
 help:
 	@grep -E "^[a-zA-Z_-]+:.*?## .*$$" $(MAKEFILE_LIST) | awk -F":.*?## " "{printf \"  %-20s %s\\n\", \$$1, \$$2}"
@@ -59,10 +63,17 @@ clean: ## Remove local artifacts
 
 # --- Lab 2 -------------------------------------------------------------------
 tune: ## Budgeted hyperparameter study (>=12 trials)
-	python -m src.tune --trials 12 --budget-thb 150
+	python -m src.tune --trials 12 --budget-thb 150 --instance $(INSTANCE) --image-uri "$(IMAGE_URI)" $(TUNE_FLAGS)
+
+train-remote: ## Submit one digest-pinned training job to managed compute
+	python scripts/train_remote.py --image-uri "$(IMAGE_URI)" --instance $(INSTANCE) $(TUNE_FLAGS)
 
 compare: ## Rank runs by metric and by cost per point
 	python scripts/compare_runs.py --experiment itcs355-lab2
+
+register-model: ## Register and promote a selected run with lineage
+	python scripts/register_model.py --run-id "$(RUN_ID)" --name "$(MODEL_REGISTRY_NAME)" \
+	  --training-job-id "$(TRAINING_JOB_ID)" --image-digest "$(IMAGE_DIGEST)" --seed $(SEED)
 
 reload-check: ## Load the registered model by version and score rows
 	python scripts/reload_check.py --name $(MODEL_REGISTRY_NAME) --version $(VERSION)

@@ -21,10 +21,13 @@ CLAIM = re.compile(
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     if not METRICS.exists():
         print("FAIL  reports/metrics.json missing — run `make reproduce` first")
         return 1
-    match = CLAIM.search(README.read_text())
+    match = CLAIM.search(README.read_text(encoding="utf-8"))
     if not match:
         print("FAIL  README.md has no claim line.\n"
               "      Add one, exactly in this form:\n"

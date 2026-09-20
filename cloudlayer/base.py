@@ -47,6 +47,9 @@ class CloudAdapter(ABC):
     def register_model(self, model_uri: str, name: str) -> str:
         raise NotImplementedError("Lab 2")
 
+    def promote_model(self, model_ref: str, stage: str = "Staging") -> str:
+        raise NotImplementedError("Lab 2")
+
     # --- Lab 3 ---------------------------------------------------------------
     def deploy(self, model_ref: str, endpoint: str, instance: str) -> str:
         raise NotImplementedError("Lab 3")
