@@ -79,6 +79,7 @@ def main() -> int:
         "--run-name", args.run_name,
         "--data-path", "/opt/ml/input/data/training/sensors.csv",
         "--model-out", "/opt/ml/model/model.joblib",
+        "--checkpoint-dir", "/opt/ml/checkpoints",
         "--training-job-id", job_name,
         "--image-digest", image_digest,
         "--git-commit", git_commit(),

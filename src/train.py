@@ -56,6 +56,8 @@ def parse_args() -> argparse.Namespace:
                    help="Input CSV path; defaults to the configured raw dataset.")
     p.add_argument("--model-out", type=Path, default=None,
                    help="Optional joblib output, used by managed training jobs.")
+    p.add_argument("--checkpoint-dir", type=Path, default=None,
+                   help="Optional resumable Random Forest checkpoint directory.")
     p.add_argument("--training-job-id", default=None)
     p.add_argument("--image-digest", default=None)
     p.add_argument("--git-commit", default=None)
@@ -66,6 +68,61 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--metrics-out", type=Path, default=None,
                    help="Write final metrics as JSON. Used by `make verify`.")
     return p.parse_args()
+
+
+def fit_model(train_df, args: argparse.Namespace):
+    """Fit directly or incrementally, persisting a warm-start checkpoint when requested."""
+    features = data.FEATURES
+    target = data.TARGET
+    signature = {
+        "n_estimators": args.n_estimators,
+        "max_depth": args.max_depth,
+        "min_samples_leaf": args.min_samples_leaf,
+        "seed": args.seed,
+    }
+    if not args.checkpoint_dir:
+        model = RandomForestClassifier(
+            n_estimators=args.n_estimators,
+            max_depth=args.max_depth,
+            min_samples_leaf=args.min_samples_leaf,
+            random_state=args.seed,
+            n_jobs=-1,
+        )
+        return model.fit(train_df[features], train_df[target])
+
+    checkpoint_dir = args.checkpoint_dir
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = checkpoint_dir / "random_forest_checkpoint.joblib"
+    model = None
+    if checkpoint.exists():
+        try:
+            state = joblib.load(checkpoint)
+            if state.get("signature") == signature:
+                model = state["model"]
+        except Exception:
+            model = None
+
+    if model is None:
+        model = RandomForestClassifier(
+            n_estimators=min(50, args.n_estimators),
+            max_depth=args.max_depth,
+            min_samples_leaf=args.min_samples_leaf,
+            random_state=args.seed,
+            n_jobs=-1,
+            warm_start=True,
+        )
+        completed = 0
+    else:
+        model.warm_start = True
+        completed = len(model.estimators_)
+
+    while completed < args.n_estimators:
+        target_estimators = min(completed + 50, args.n_estimators)
+        model.n_estimators = target_estimators
+        model.fit(train_df[features], train_df[target])
+        completed = target_estimators
+        joblib.dump({"signature": signature, "model": model}, checkpoint)
+    return model
 
 
 def main() -> None:
@@ -93,6 +150,7 @@ def main() -> None:
             "data_version": data_version,
             "instance_type": args.instance_type,
             "spot": args.spot,
+            "checkpoint_enabled": bool(args.checkpoint_dir),
         }
         if args.training_job_id:
             params["training_job_id"] = args.training_job_id
@@ -114,14 +172,7 @@ def main() -> None:
             tags["image_digest"] = args.image_digest
         mlflow.set_tags(tags)
 
-        model = RandomForestClassifier(
-            n_estimators=args.n_estimators,
-            max_depth=args.max_depth,
-            min_samples_leaf=args.min_samples_leaf,
-            random_state=seed,
-            n_jobs=-1,
-        )
-        model.fit(train_df[data.FEATURES], train_df[data.TARGET])
+        model = fit_model(train_df, args)
 
         metrics: dict[str, float] = {}
         for name, part in (("val", val_df), ("test", test_df)):
@@ -147,6 +198,7 @@ def main() -> None:
             "image_digest": args.image_digest or "local",
             "instance_type": args.instance_type,
             "spot": args.spot,
+            "checkpoint_enabled": bool(args.checkpoint_dir),
             **metrics,
         }
         print(json.dumps(result, indent=2))
