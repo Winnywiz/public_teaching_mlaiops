@@ -1,5 +1,5 @@
-# ITCS355 Labs 1–2
-# `make reproduce` remains the Lab 1 local smoke test; `make tune` is the Lab 2 study.
+# ITCS355 Labs 1–3
+# Lab 3 adds registry-backed serving, load testing, canary, rollback, and teardown.
 
 SHELL := /bin/bash
 IMAGE ?= itcs355-lab1
@@ -10,9 +10,21 @@ INSTANCE ?= ml.m5.large
 TUNE_FLAGS ?=
 IMAGE_URI ?=
 MODEL_REGISTRY_NAME ?= itcs355
+ENDPOINT ?= itcs355-lab3
+TARGET ?= http://127.0.0.1:8080
+SERVE_INSTANCE ?= 0.5cpu/1Gi
+LOAD_INSTANCE ?= local
+P95_TARGET_MS ?= 200
+LOAD_DURATION ?= 30s
+PAYLOAD_BYTES ?= 0
+UTILIZATION ?= 0.25
+HOURLY_RATE_THB ?=
+THROUGHPUT_RPS ?=
+BATCH_COST_PER_1000_THB ?=
 
-.PHONY: help setup cloud-check data test portability-audit train image image-push reproduce verify clean teardown \
-        tune train-remote compare register-model reload-check serve serve-image loadtest drift inject-drift pipeline cost swap-check llm-eval llm-gate
+.PHONY: help setup cloud-check data test portability-audit train image image-push reproduce verify clean teardown teardown-lab2 \
+        tune train-remote compare register-model reload-check serve serve-image serve-image-push aca-env-create deploy smoke \
+        canary-model canary loadtest payload-test batch-test cold-start-test cost-report aca-identity-create drift inject-drift pipeline cost swap-check llm-eval llm-gate
 
 help:
 	@grep -E "^[a-zA-Z_-]+:.*?## .*$$" $(MAKEFILE_LIST) | awk -F":.*?## " "{printf \"  %-20s %s\\n\", \$$1, \$$2}"
@@ -54,7 +66,12 @@ reproduce: data image ## THE ONE COMMAND. Grader runs this.
 verify: ## Check the produced metric against the README claim
 	python scripts/verify_metric.py
 
-teardown: ## Delete every resource tagged course=itcs355 for this lab
+teardown: ## Delete only resources tagged course=itcs355 and lab=3
+	python -c "from src import config; from cloudlayer.factory import get_adapter; \
+	cfg=config.load(strict=False); \
+	print('No Azure Lab 3 resources configured; nothing deleted.' if cfg.provider != 'azure' else get_adapter(cfg).teardown(cfg.tags(3)))"
+
+teardown-lab2: ## Remove Lab 2 tagged compute (kept separate from Lab 3 teardown)
 	python -c "from src import config; from cloudlayer.factory import get_adapter; \
 	cfg=config.load(); print(get_adapter(cfg).teardown(cfg.tags(2)))"
 
@@ -79,18 +96,54 @@ reload-check: ## Load the registered model by version and score rows
 	python scripts/reload_check.py --name $(MODEL_REGISTRY_NAME) --version $(VERSION)
 
 # --- Lab 3 -------------------------------------------------------------------
-serve: ## Run the inference service locally on :8080
+serve: ## Export a local-only model and run the inference service on :8080
 	python scripts/export_model.py --out reports/model.joblib
 	MODEL_PATH=reports/model.joblib MODEL_VERSION=local uvicorn service.app:app --port 8080
 
-serve-image: ## Build the serving image
+serve-image: ## Build the serving image locally
 	docker buildx build --platform $(PLATFORM) -f service/Dockerfile.serve -t itcs355-serve:$(TAG) --load .
 
-loadtest: ## Load test at three concurrency levels
-	@for vus in 1 10 50; do \
-	  echo "=== $$vus VUs ==="; \
-	  k6 run -e TARGET=$(TARGET) -e VUS=$$vus loadtest/k6.js || true; \
-	done
+serve-image-push: serve-image ## Push the serving image and print its immutable digest
+	python -c "from src import config; from cloudlayer.factory import get_adapter; \
+	print(get_adapter(config.load()).push_image('itcs355-serve:$(TAG)'))"
+
+aca-env-create: ## Create the tagged, log-disabled Azure Container Apps environment (billable if active)
+	python scripts/manage_azure.py create-environment
+
+aca-identity-create: ## Create a tagged user-assigned identity; roles remain explicit user/admin actions
+	python scripts/manage_azure.py create-identity
+
+deploy: ## Deploy a registered model version; set VERSION first
+	python scripts/deploy_service.py --version "$(VERSION)" --endpoint "$(ENDPOINT)" --instance "$(SERVE_INSTANCE)"
+
+smoke: ## Send three predictions and verify response/version/request-id contracts
+	python scripts/smoke_service.py --endpoint "$(ENDPOINT)"
+
+canary-model: ## Train and register a slightly weaker model; set STABLE_VERSION first
+	python scripts/register_canary_model.py --stable-version "$(STABLE_VERSION)"
+
+canary: ## 90/10 metric-only canary with automatic rollback; set CANARY_VERSION
+	python scripts/canary_rollback.py --endpoint "$(ENDPOINT)" --candidate-version "$(CANARY_VERSION)" \
+	  --instance "$(SERVE_INSTANCE)" --p95-target-ms $(P95_TARGET_MS)
+
+loadtest: ## Measure p50/p95/p99, throughput, and errors at 1/10/50 users
+	python scripts/run_loadtest.py --scenario concurrency --target "$(TARGET)" --p95-target-ms $(P95_TARGET_MS) \
+	  --instance "$(LOAD_INSTANCE)" --duration "$(LOAD_DURATION)"
+
+payload-test: ## Compare normal, 4 KiB, 16 KiB, and 60 KiB requests at 10 users
+	python scripts/run_loadtest.py --scenario payload --target "$(TARGET)" --instance "$(LOAD_INSTANCE)" --duration "$(LOAD_DURATION)"
+
+batch-test: ## Compare 100 single calls with one batch of 100
+	python scripts/benchmark_batch.py --endpoint "$(TARGET)" --rows 100
+
+cold-start-test: ## Measure first successful prediction after Azure Container Apps reaches zero replicas
+	python scripts/measure_cold_start.py --endpoint "$(ENDPOINT)"
+
+cost-report: ## Calculate cost/1k and batch break-even after supplying measured cost inputs
+	HOURLY_RATE_THB="$(HOURLY_RATE_THB)" THROUGHPUT_RPS="$(THROUGHPUT_RPS)" \
+	BATCH_COST_PER_1000_THB="$(BATCH_COST_PER_1000_THB)" REQUEST_RATE_THB_PER_MILLION="$(REQUEST_RATE_THB_PER_MILLION)" \
+	WARM_HOURLY_RATE_THB="$(WARM_HOURLY_RATE_THB)" \
+	python scripts/lab3_cost_report.py --utilization $(UTILIZATION) --instance "$(SERVE_INSTANCE)"
 
 # --- Lab 4 -------------------------------------------------------------------
 inject-drift: ## Shift a feature's distribution on purpose

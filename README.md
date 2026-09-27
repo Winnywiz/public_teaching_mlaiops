@@ -1,4 +1,94 @@
-# ITCS355 Lab 2 — Experiment Tracking and Model Registry
+# ITCS355 Lab 3 — Serving, Load Testing, and Rollback
+
+This is a separate Lab 3 checkout, based on the completed Lab 2 branch. It adds a registry-backed
+FastAPI service, a digest-pinned Azure Container Apps deployment, three-level load testing, batch and
+payload experiments, metric-gated canary rollback, cost calculations, and tagged teardown. The
+assignment specification is [`course/labs/lab-03-serving-and-rollback.md`](course/labs/lab-03-serving-and-rollback.md).
+
+## Status and required user action
+
+The service, Azure Container Apps adapter, managed deployment, load-test tooling, canary workflow,
+cost worksheet, and tagged teardown are implemented. This checkout uses the existing Lab 2 Azure
+ML registry and a separate Lab 3 Container Apps environment; `cloud.env` is local and gitignored.
+
+**Cloud evidence completed (2026-09-28):** the public HTTPS endpoint was deployed and smoke-tested
+with MLflow model version `1`. The selected `1cpu/2Gi` revision met the predeclared 200 ms p95 target at
+10 concurrent Locust users (190 ms, zero errors); it first exceeded the target at 50 users (620 ms,
+zero errors). The prior `0.5cpu/1Gi` run crossed the target at 10 users (370 ms). Batch and payload
+experiments also ran against Azure. The 90/10 canary detected degradation in 129.9 seconds and
+verified stable traffic returned to 100%. Cold start from confirmed zero replicas was 31.6 seconds;
+the warm follow-up was 296 ms. The retail-price cost estimate is not the account's eventual invoice.
+
+The app, identity, and both Lab 3 Container Apps environments have now been deleted and verified.
+**Required user action:** no additional setup is needed to submit the code/evidence. Check Azure Cost
+Analysis after usage posts to reconcile the estimate with your student subscription's actual charges.
+Shared Lab 2 models, registry, ACR, and unrelated resources were retained.
+
+### Azure deployment record
+
+- App and endpoint: `itcs355-lab3` · Japan East · [HTTPS endpoint](https://itcs355-lab3.agreeablesand-112bc772.japaneast.azurecontainerapps.io) (decommissioned after evidence capture)
+- Selected revision size: `1cpu/2Gi`; minimum replicas were zero; external ingress was temporary.
+- Container image: `itcs3556688040.azurecr.io/itcs355@sha256:1a9275a36667e663f5fd1fd83ecf71cf1e33e771ce2331a364d805a86ed0c872`.
+- Image was built/pushed locally with Docker because ACR Tasks are not enabled for this subscription.
+- The standard Consumption-only environment supported managed identity and multi-revision canary traffic. The earlier Express environment was not used. Teardown verified both Lab 3 environments were deleted.
+- The app pulls the registered MLflow artifact using its user-assigned identity. The serving loader trusts only the reviewed `sklearn.tree._tree.Tree` skops type required by model version 1; other unreviewed serialized types are rejected.
+
+The endpoint is no longer running. Redeploy with `scripts/deploy_service.py` only if you intentionally
+need it again; that can incur cloud charges.
+
+### Local development (PowerShell)
+
+Install the pinned load-generator dependencies after the locks below are available, create the
+ignored synthetic dataset/model, and run the server in one terminal:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m venv .venv-loadtest
+.\.venv-loadtest\Scripts\python.exe -m pip install --require-hashes -r requirements-loadtest.txt
+python scripts/make_dataset.py
+python scripts/export_model.py --out reports/model.joblib
+$env:MODEL_PATH = (Resolve-Path reports/model.joblib).Path
+$env:MODEL_VERSION = 'local'
+python -m uvicorn service.app:app --host 127.0.0.1 --port 8080
+```
+
+In another terminal, run local verification and use the endpoint for development-only tests. The
+Locust scripts are committed; generated CSVs are ignored.
+
+```powershell
+python -m pytest -q tests/
+python scripts/run_loadtest.py --scenario concurrency --target http://127.0.0.1:8080 --p95-target-ms 200 --instance local
+python scripts/run_loadtest.py --scenario payload --target http://127.0.0.1:8080 --instance local
+python scripts/benchmark_batch.py --endpoint http://127.0.0.1:8080 --rows 100
+python scripts/lab3_cost_report.py --utilization 0.25
+```
+
+Managed endpoint evidence used the pinned load-test requirements and a 200 ms p95 target declared
+before measurement. At `1cpu/2Gi`, the endpoint met it at 1 and 10 users; the first tested breaking
+level was 50 users. The 90/10 canary report records model metrics, revision weights, detection time,
+and verified rollback. The cold-start report separately records scale-out and warm latency.
+
+### Lab 3 evidence
+
+| Deliverable | File / state |
+|---|---|
+| Service, schemas, probes, structured logs | `service/app.py`, `service/schemas.py`, `service/Dockerfile.serve` |
+| Azure managed deployment and invoke/traffic adapter | `cloudlayer/azure.py` |
+| 1/10/50 concurrency percentiles and breaking point | `reports/lab3-load.md`; `reports/lab3-load-small.md` retains the smaller-instance comparison |
+| Batch-size and payload-size findings | `reports/lab3-batch.md`, `reports/lab3-payload.md` |
+| Instance-size latency and retail cost delta | `reports/lab3-instance-size.md` |
+| Canary metric, detection time, timestamped rollback | `reports/lab3-rollback-20260927T182921Z.md` (passed; rollback verified) |
+| Scale-to-zero cold-start timing | `reports/lab3-cold-start.md` (31.6 s cold, 296 ms warm) |
+| Cost / 1,000 and batch break-even | `reports/lab3-cost.md`; retail-price estimate, reconcile with actual Azure billing |
+| Cloud deletion | `scripts/manage_azure.py teardown`; verified no Lab 3 app, identity, or environment remains |
+
+The unit tests do not create cloud resources. `make teardown` is scoped to exact Lab 3 tags; it
+leaves Lab 2 jobs, models, ACR, and unrelated resources untouched. Azure Cost Analysis may update
+after teardown rather than immediately.
+
+---
+
+## Previous Lab 2 baseline — Experiment Tracking and Model Registry
 
 > **Course materials live in [`course/`](course/README.md)** — syllabus, slides, the faculty
 > specification, all five lab handouts, and the project brief. Every document is Markdown and
@@ -6,9 +96,9 @@
 > [portability reference](course/reference/cloud-portability-reference.md).
 > Keep this block when you edit the rest of this file; it is not part of the Lab 1 deliverable.
 
-This checkout is a separate Lab 2 repository. It carries the completed Lab 1 reproducibility
-foundation and adds a resumable, budgeted study, comparison report, lineage-aware registration,
-staging promotion, and registry reload check.
+The Lab 2 baseline in this checkout carries the completed Lab 1 reproducibility foundation and
+adds a resumable, budgeted study, comparison report, lineage-aware registration, staging promotion,
+and registry reload check.
 
 The selected cloud adapter is Azure. The storage, DVC remote, MLflow endpoint, digest-pinned image,
 12-trial managed study, model registry, promotion, and registry reload are complete. Serverless and

@@ -57,6 +57,20 @@ class CloudAdapter(ABC):
     def invoke(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError("Lab 3")
 
+    def list_revisions(self, endpoint: str) -> list[dict[str, Any]]:
+        raise NotImplementedError("Lab 3 canary revisions")
+
+    def set_traffic_weights(self, endpoint: str, weights: dict[str, int]) -> None:
+        raise NotImplementedError("Lab 3 canary traffic split")
+
+    def rollback(self, endpoint: str, stable_revision: str) -> None:
+        revisions = self.list_revisions(endpoint)
+        weights = {str(item["name"]): 0 for item in revisions if item.get("name")}
+        if stable_revision not in weights:
+            raise ValueError(f"Unknown stable revision: {stable_revision}")
+        weights[stable_revision] = 100
+        self.set_traffic_weights(endpoint, weights)
+
     # --- Lab 4 ---------------------------------------------------------------
     def emit_metric(self, name: str, value: float, unit: str = "None") -> None:
         raise NotImplementedError("Lab 4")
@@ -115,3 +129,33 @@ class LocalAdapter(CloudAdapter):
         raise NotImplementedError(
             "LocalAdapter cannot push images. Implement your provider's adapter for Lab 1 submission."
         )
+
+    def invoke(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Invoke a locally running Lab 3 service over its HTTP URL."""
+        import json
+        from urllib.error import HTTPError, URLError
+        from urllib.request import Request, urlopen
+
+        if not endpoint.startswith(("http://", "https://")):
+            raise ValueError("LocalAdapter.invoke expects an HTTP URL such as http://127.0.0.1:8080")
+        request = Request(
+            endpoint.rstrip("/") + "/predict",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                decoded = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Local endpoint returned HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"Could not reach local endpoint: {exc.reason}") from exc
+        if not isinstance(decoded, dict):
+            raise RuntimeError("Local endpoint returned a non-object JSON response")
+        return decoded
+
+    def teardown(self, tags: dict[str, str]) -> list[str]:
+        """There are no cloud resources attached to a local adapter."""
+        return []

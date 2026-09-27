@@ -1,0 +1,2 @@
+# Client-side load generator. Kept separate from the serving image.
+locust>=2.31,<3
