@@ -8,22 +8,35 @@ contract test, the same bounds are what CI asserts against.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import json
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class PredictRequest(BaseModel):
-    temp_c: float = Field(..., ge=-10, le=140)
-    vibration_mm_s: float = Field(..., ge=0, le=60)
-    pressure_kpa: float = Field(..., ge=0, le=600)
-    hours_since_service: float = Field(..., ge=0, le=20000)
-    load_pct: float = Field(..., ge=0, le=100)
-    ambient_humidity: float = Field(..., ge=0, le=100)
+    temp_c: float = Field(..., ge=-10, le=140, allow_inf_nan=False)
+    vibration_mm_s: float = Field(..., ge=0, le=60, allow_inf_nan=False)
+    pressure_kpa: float = Field(..., ge=0, le=600, allow_inf_nan=False)
+    hours_since_service: float = Field(..., ge=0, le=20000, allow_inf_nan=False)
+    load_pct: float = Field(..., ge=0, le=100, allow_inf_nan=False)
+    ambient_humidity: float = Field(..., ge=0, le=100, allow_inf_nan=False)
+    metadata: dict[str, str] | None = Field(
+        default=None,
+        description="Optional caller metadata; ignored by the model and capped at 64 KiB.",
+    )
 
     model_config = {"extra": "forbid"}
 
+    @field_validator("metadata")
+    @classmethod
+    def metadata_is_bounded(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is not None and len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 65_536:
+            raise ValueError("metadata must be at most 65536 UTF-8 bytes")
+        return value
+
 
 class PredictResponse(BaseModel):
-    probability: float
+    probability: float = Field(ge=0, le=1)
     model_version: str
 
 

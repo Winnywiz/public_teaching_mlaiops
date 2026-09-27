@@ -7,13 +7,16 @@ Use either this or k6, not both. Whichever you choose, commit it.
 """
 from __future__ import annotations
 
+import os
 import random
 
-from locust import HttpUser, between, task
+from locust import HttpUser, constant, task
+
+PAYLOAD_BYTES = max(0, int(os.environ.get("PAYLOAD_BYTES", "0")))
 
 
 def sample_payload() -> dict:
-    return {
+    payload = {
         "temp_c": round(random.uniform(60, 95), 3),
         "vibration_mm_s": round(random.uniform(1.0, 8.0), 3),
         "pressure_kpa": round(random.uniform(280, 350), 3),
@@ -21,10 +24,13 @@ def sample_payload() -> dict:
         "load_pct": round(random.uniform(20, 100), 3),
         "ambient_humidity": round(random.uniform(30, 85), 3),
     }
+    if PAYLOAD_BYTES > 300:
+        payload["metadata"] = {"padding": "x" * (PAYLOAD_BYTES - 300)}
+    return payload
 
 
 class PredictUser(HttpUser):
-    wait_time = between(0.0, 0.1)
+    wait_time = constant(0)
 
     @task(9)
     def predict(self):
@@ -35,6 +41,8 @@ class PredictUser(HttpUser):
     @task(1)
     def predict_batch(self):
         rows = [sample_payload() for _ in range(50)]
-        # TODO(Lab 3): compare this against 50 single calls. Report the difference,
-        # and the concurrency at which the advantage disappears.
-        self.client.post("/predict/batch", json={"rows": rows})
+        with self.client.post("/predict/batch", json={"rows": rows}, catch_response=True) as r:
+            if r.status_code != 200:
+                r.failure(f"status {r.status_code}")
+            elif len(r.json().get("probabilities", [])) != len(rows):
+                r.failure("batch response length mismatch")

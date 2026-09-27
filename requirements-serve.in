@@ -1,0 +1,10 @@
+# Serving runtime. Keep aligned with the Lab 2 Azure MLflow model artifact.
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.5
+pandas==2.3.3
+numpy==2.4.4
+scikit-learn==1.8.0
+mlflow==3.15.0
+azureml-mlflow==1.62.0.post6
+joblib==1.4.2
