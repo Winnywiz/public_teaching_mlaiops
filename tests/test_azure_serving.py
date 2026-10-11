@@ -34,6 +34,40 @@ def test_model_reference_requires_exact_configured_registry_name():
         AzureAdapter._model_name_version("other:1", "itcs355-test")
 
 
+def test_get_secret_reads_from_configured_vault_using_active_credential(monkeypatch):
+    instance = adapter()
+    monkeypatch.setenv("AZURE_KEY_VAULT_URL", "https://student-vault.vault.azure.net/")
+    captured = {}
+
+    class Credential:
+        def close(self):
+            captured["closed"] = True
+
+    class Secret:
+        value = "resolved-secret"
+
+    class SecretClient:
+        def __init__(self, vault_url, credential):
+            captured["vault_url"] = vault_url
+            captured["credential"] = credential
+
+        def get_secret(self, name):
+            captured["name"] = name
+            return Secret()
+
+    azure_package = SimpleNamespace(identity=SimpleNamespace(DefaultAzureCredential=Credential))
+    keyvault_package = SimpleNamespace(secrets=SimpleNamespace(SecretClient=SecretClient))
+    monkeypatch.setitem(__import__("sys").modules, "azure", azure_package)
+    monkeypatch.setitem(__import__("sys").modules, "azure.identity", azure_package.identity)
+    monkeypatch.setitem(__import__("sys").modules, "azure.keyvault", keyvault_package)
+    monkeypatch.setitem(__import__("sys").modules, "azure.keyvault.secrets", keyvault_package.secrets)
+
+    assert instance.get_secret("drift-webhook") == "resolved-secret"
+    assert captured["vault_url"] == "https://student-vault.vault.azure.net/"
+    assert captured["name"] == "drift-webhook"
+    assert captured["closed"] is True
+
+
 @pytest.mark.parametrize("instance", ["0.25cpu/0.5Gi", "0.5cpu/1Gi", "1cpu/2Gi", "2cpu/4Gi"])
 def test_supported_aca_resource_pairs(instance):
     cpu, memory = AzureAdapter._container_resources(instance)

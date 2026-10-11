@@ -1,8 +1,9 @@
 """Azure adapter for Blob Storage, ACR, Azure ML jobs, and model registry.
 
-The adapter deliberately uses the Azure CLI for the provider boundary. The CLI already
-uses the user's ``az login`` session locally and Azure ML's job identity remotely, so no
-storage keys, registry passwords, or service-principal secrets enter the project.
+The adapter deliberately uses the Azure CLI for most operations and the Azure SDK for
+Key Vault secret retrieval. Both use the user's ``az login`` session locally and Azure
+ML's job identity remotely, so no storage keys, registry passwords, or service-principal
+secrets enter the project.
 """
 from __future__ import annotations
 
@@ -40,6 +41,28 @@ class AzureAdapter(CloudAdapter):
         self._last_training_result: dict[str, Any] = {}
         self._registry_metadata: dict[str, Any] = {}
         self._last_registry_ref: str | None = None
+
+    def get_secret(self, name: str) -> str:
+        """Read a named secret from the configured vault using the active identity."""
+        vault_url = self._env("AZURE_KEY_VAULT_URL")
+        if not vault_url:
+            raise RuntimeError("AZURE_KEY_VAULT_URL is required to resolve the configured secret")
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.keyvault.secrets import SecretClient
+        except ImportError as exc:
+            raise RuntimeError(
+                "Key Vault support requires azure-identity and azure-keyvault-secrets"
+            ) from exc
+
+        credential = DefaultAzureCredential()
+        try:
+            secret = SecretClient(vault_url=vault_url, credential=credential).get_secret(name)
+            if not secret.value:
+                raise RuntimeError(f"Key Vault secret {name!r} is empty")
+            return secret.value
+        finally:
+            credential.close()
 
     # --- CLI and resource helpers -------------------------------------------
     @staticmethod

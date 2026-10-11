@@ -1,0 +1,11 @@
+name: itcs355-lab4-drift
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - numpy==2.4.4
+      - pandas==2.3.3
+      - azure-identity==1.25.3
+      - azure-keyvault-secrets==4.11.3

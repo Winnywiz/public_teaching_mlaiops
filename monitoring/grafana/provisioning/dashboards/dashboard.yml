@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: ITCS355
+    orgId: 1
+    folder: ITCS355
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

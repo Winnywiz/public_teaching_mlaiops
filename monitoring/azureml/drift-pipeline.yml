@@ -1,0 +1,46 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+type: pipeline
+display_name: ITCS355 scheduled drift check
+experiment_name: itcs355-lab4-drift
+tags:
+  course: itcs355
+  lab: "4"
+
+settings:
+  default_compute: azureml:itcs355-lab4-drift-compute
+  force_rerun: true
+
+identity:
+  type: managed_identity
+
+inputs:
+  reference:
+    type: uri_file
+    path: azureml:itcs355-reference-data@latest
+  current:
+    type: uri_file
+    path: azureml:itcs355-current-inputs@latest
+
+jobs:
+  detect:
+    code: ../..
+    command: >-
+      python -m monitoring.drift
+      --reference ${{parent.inputs.reference}}
+      --current ${{parent.inputs.current}}
+      --threshold 0.20
+      --out ${{outputs.evidence}}/drift.json
+      --pushgateway-url ${{inputs.pushgateway_url}}
+      --require-metric-delivery
+      --require-alert-delivery
+    environment: azureml:itcs355-lab4-drift:1
+    environment_variables:
+      AZURE_KEY_VAULT_URL: https://<YOUR-KEY-VAULT>.vault.azure.net/
+      AZURE_TOKEN_CREDENTIALS: ManagedIdentityCredential
+      DRIFT_ALERT_SECRET_NAME: itcs355-drift-slack-webhook
+      PROMETHEUS_PUSHGATEWAY_TOKEN_SECRET_NAME: itcs355-pushgateway-token
+    inputs:
+      pushgateway_url: https://<YOUR-AUTHENTICATED-PUSHGATEWAY>/
+    outputs:
+      evidence:
+        type: uri_folder

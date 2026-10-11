@@ -20,7 +20,7 @@ from sklearn.ensemble import RandomForestClassifier
 from src import config, data, seeds
 
 RAW = config.REPO_ROOT / "data" / "raw" / "sensors.csv"
-LATENCY_BUDGET_MS = 50.0  # TODO(Lab 4): set from YOUR p95 target in loadtest/k6.js
+LATENCY_BUDGET_MS = 200.0  # Keep aligned with the predeclared target in loadtest/k6.js
 
 
 @pytest.fixture(scope="module")
@@ -77,11 +77,15 @@ def test_prediction_latency_within_budget(fitted):
     model, test_df = fitted
     sample = test_df[data.FEATURES].head(100)
     model.predict_proba(sample)  # warm up; the first call includes lazy setup
-    started = time.perf_counter()
-    for _ in range(20):
+    latencies_ms = []
+    for _ in range(100):
+        started = time.perf_counter()
         model.predict_proba(sample.head(1))
-    elapsed_ms = (time.perf_counter() - started) * 1000 / 20
-    assert elapsed_ms < LATENCY_BUDGET_MS, f"single prediction took {elapsed_ms:.2f} ms"
+        latencies_ms.append((time.perf_counter() - started) * 1000)
+    p95_ms = float(np.percentile(latencies_ms, 95))
+    assert p95_ms < LATENCY_BUDGET_MS, (
+        f"prediction p95 was {p95_ms:.2f} ms, budget is {LATENCY_BUDGET_MS:.1f} ms"
+    )
 
 
 def test_model_is_not_constant(fitted):

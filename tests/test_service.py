@@ -188,3 +188,16 @@ def test_ready_and_prediction_fail_closed_if_model_disappears(client):
         assert client.post("/predict", json=VALID).status_code == 503
     finally:
         STATE["model"] = model
+
+
+def test_metrics_endpoint_exposes_request_and_model(client):
+    from monitoring import metrics
+
+    metrics.reset_metrics_for_test()
+    response = client.post("/predict", json=VALID)
+    assert response.status_code == 200
+
+    exposition = client.get("/metrics").text
+    assert "http_requests_total" in exposition
+    assert 'model_version_info{model_version="test-1"} 1' in exposition
+    assert 'feature_rolling_mean{feature="temp_c"}' in exposition

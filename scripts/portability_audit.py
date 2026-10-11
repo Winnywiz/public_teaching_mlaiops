@@ -10,7 +10,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCANNED = ["src", "service", "monitoring", "tests"]
+# Test fixtures may name fake provider resources to exercise adapters. Audit runtime
+# code only, where provider-specific implementation belongs behind cloudlayer/.
+SCANNED = ["src", "service", "monitoring"]
 
 FORBIDDEN = [
     (r"s3://", "S3 URI"),

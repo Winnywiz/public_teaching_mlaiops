@@ -15,6 +15,7 @@ WORKDIR /app
 COPY --chown=runner:runner service/ ./service/
 COPY --chown=runner:runner src/ ./src/
 COPY --chown=runner:runner cloudlayer/ ./cloudlayer/
+COPY --chown=runner:runner monitoring/ ./monitoring/
 USER runner
 
 EXPOSE 8080

@@ -3,6 +3,7 @@ cloud.env
 
 # DVC manages these; Git must not.
 data/raw/
+data/current.csv
 data/_local_blob/
 .dvc/cache/
 
