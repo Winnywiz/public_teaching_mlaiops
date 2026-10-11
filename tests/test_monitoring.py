@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -17,6 +18,31 @@ def reset_metrics():
     metrics.reset_metrics_for_test()
     yield
     metrics.reset_metrics_for_test()
+
+
+def test_resolve_secret_prefers_direct_environment_value(monkeypatch):
+    monkeypatch.setenv("DRIFT_WEBHOOK", "local-test-webhook")
+    monkeypatch.setenv("DRIFT_SECRET_NAME", "ignored-secret")
+
+    assert drift._resolve_secret("DRIFT_WEBHOOK", "DRIFT_SECRET_NAME") == "local-test-webhook"
+
+
+def test_resolve_secret_delegates_secret_store_to_cloud_adapter(monkeypatch):
+    import cloudlayer.factory
+    from src import config
+
+    monkeypatch.delenv("DRIFT_WEBHOOK", raising=False)
+    monkeypatch.setenv("DRIFT_SECRET_NAME", "drift-webhook")
+    monkeypatch.setattr(config, "load", lambda strict=False: SimpleNamespace(provider="azure"))
+
+    class SecretAdapter:
+        def get_secret(self, name):
+            assert name == "drift-webhook"
+            return "resolved-webhook"
+
+    monkeypatch.setattr(cloudlayer.factory, "get_adapter", lambda cfg: SecretAdapter())
+
+    assert drift._resolve_secret("DRIFT_WEBHOOK", "DRIFT_SECRET_NAME") == "resolved-webhook"
 
 
 def test_metrics_count_requests_by_status_and_bound_route_labels():

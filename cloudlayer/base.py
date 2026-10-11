@@ -72,6 +72,10 @@ class CloudAdapter(ABC):
         self.set_traffic_weights(endpoint, weights)
 
     # --- Lab 4 ---------------------------------------------------------------
+    def get_secret(self, name: str) -> str:
+        """Resolve a secret through the configured provider's secret store."""
+        raise NotImplementedError(f"{self.cfg.provider} secret retrieval is not configured")
+
     def emit_metric(self, name: str, value: float, unit: str = "None") -> None:
         raise NotImplementedError("Lab 4")
 

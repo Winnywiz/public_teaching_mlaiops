@@ -176,32 +176,19 @@ def send_slack_alert(webhook_url: str, results: list[FeatureDrift], threshold: f
             raise RuntimeError(f"alert channel returned HTTP {response.status}")
 
 
-def _key_vault_secret(secret_name: str) -> str:
-    vault_url = os.environ.get("AZURE_KEY_VAULT_URL")
-    if not vault_url:
-        raise RuntimeError("AZURE_KEY_VAULT_URL is required to resolve the configured secret")
-    try:
-        from azure.identity import DefaultAzureCredential
-        from azure.keyvault.secrets import SecretClient
-    except ImportError as exc:
-        raise RuntimeError("Azure Key Vault support requires azure-identity and azure-keyvault-secrets") from exc
-
-    credential = DefaultAzureCredential()
-    try:
-        secret = SecretClient(vault_url=vault_url, credential=credential).get_secret(secret_name)
-        if not secret.value:
-            raise RuntimeError(f"Key Vault secret {secret_name!r} is empty")
-        return secret.value
-    finally:
-        credential.close()
-
-
 def _resolve_secret(env_name: str, secret_name_env: str) -> str | None:
     direct_value = os.environ.get(env_name)
     if direct_value:
         return direct_value
     secret_name = os.environ.get(secret_name_env)
-    return _key_vault_secret(secret_name) if secret_name else None
+    if not secret_name:
+        return None
+
+    from cloudlayer.factory import get_adapter
+    from src import config
+
+    adapter = get_adapter(config.load(strict=False))
+    return adapter.get_secret(secret_name)
 
 
 def _injection_timestamp(path: Path) -> str | None:
