@@ -892,6 +892,9 @@ graphql-relay==3.2.0 \
     --hash=sha256:1ff1c51298356e481a0be009ccdff249832ce53f30559c1338f22a0e0d17250c \
     --hash=sha256:c9b22bd28b170ba1fe674c74384a8ff30a76c8e26f88ac3aa1584dd3179953e5
     # via graphene
+gunicorn==26.2.0 ; sys_platform != "win32" \
+    --hash=sha256:bd249d0b3f7972f7432f0a6b6ff3b3ee2d129f70cd1ff6c09a9dd9e29a2b88e3
+    # via -r requirements.in
 greenlet==3.5.5 \
     --hash=sha256:03115c2e0a371999bf8ae616aa8d653f96641d4705c457aebaa187276e9f7537 \
     --hash=sha256:03551ed792cb1b4fc0277a0c60dfd8c343894a0ba06fe60dcd22f568b433da39 \
