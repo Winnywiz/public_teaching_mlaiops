@@ -1,3 +1,116 @@
+# ITCS355 Lab 4 — CI/CD, Monitoring, and Drift
+
+This is a separate Lab 4 checkout on branch `codex/lab4-cicd-monitoring-drift`. Lab 4 adds
+full-history secret scanning, hash-locked CI, a SHA-tagged serving image, a green-main-only Azure
+staging workflow, Prometheus service metrics, a provisioned Grafana dashboard, explicit SLOs, and a
+PSI/KS drift detector. It leaves the previous Lab 1–3 material in this fork intact.
+
+## Lab 4 status and remaining evidence
+
+The local implementation and generated-data tests run without Azure credentials. No GitHub Actions
+run, deliberately failing pull request, Azure ML schedule, hosted Pushgateway, Slack alert, or staging
+deployment has been created from this checkout. Those require your repository, Azure workspace, and
+notification-channel setup. The local drift simulation is evidence of the detector only, not proof
+that a real channel received an alert. See [`reports/lab4-drift.md`](reports/lab4-drift.md) for the
+measured local result and outstanding evidence.
+
+### Why the data contracts matter
+
+The contract tests in `tests/test_data.py` map to concrete production incidents:
+
+- `test_schema_columns_present_and_typed`: a sensor firmware/export change renames `pressure_kpa`
+  or serializes numeric readings as strings, otherwise silently feeding the wrong values downstream.
+- `test_no_nulls_in_required_columns`: a partial telemetry outage or broken join emits null feature
+  values; reject the batch instead of imputing a plausible-looking but misleading prediction.
+- `test_features_within_plausible_ranges`: a Fahrenheit/Celsius, psi/kPa, or 0–1/0–100 unit change
+  crosses domain bounds before corrupt readings reach the model.
+- `test_target_is_binary_and_not_degenerate`: an upstream label mapping change turns all labels into
+  one class, making a training run appear successful while learning no useful distinction.
+- `test_identifier_is_unique`: replayed or duplicated readings inflate counts and can distort the
+  training set and operational reporting.
+
+The separate group-split property test catches machine leakage between train, validation, and test.
+The model behavior test checks probability bounds and p95 latency on a fixed sample. CI also builds
+and starts the serving image, checks the `/predict` response and SHA model version, and verifies the
+`/metrics` endpoint.
+
+### Run locally (PowerShell)
+
+```powershell
+python -m pip install --require-hashes -r requirements.txt
+python scripts/make_dataset.py
+python scripts/export_model.py --out reports/model.joblib
+$env:MODEL_PATH = (Resolve-Path reports/model.joblib).Path
+$env:MODEL_VERSION = 'local'
+docker compose -f docker-compose.monitoring.yml up --build -d
+```
+
+Grafana is at `http://127.0.0.1:3000` and Prometheus at `http://127.0.0.1:9090`; both are bound to
+localhost. Grafana's initial login is `admin` / `admin`, so set `$env:GRAFANA_ADMIN_PASSWORD` before
+starting the stack if you want a different local password. Inject and score a local drift sample:
+
+```powershell
+python scripts/inject_drift.py --feature temp_c --mode shift --magnitude 6
+python -m monitoring.drift --current data/current.csv --pushgateway-url http://localhost:9091
+```
+
+This local detector call has no alert channel unless `DRIFT_ALERT_WEBHOOK_URL` is set in the current
+process environment. Do not paste the webhook into a tracked file. To stop the local dashboard stack,
+run `docker compose -f docker-compose.monitoring.yml down`.
+
+The alert threshold is PSI `0.20`. Calibration on the checked-in deterministic data produced PSI
+`0.38333` for a +6°C shift in the 6,000-row `temp_c` reference. Across 100 same-distribution
+6,000-row comparisons, the largest observed PSI was `0.00726`. Thus this threshold is below the
+material injected shift and about 27 times the largest observed sampling-noise score in that check.
+It is a starting threshold for this synthetic dataset, not a universal production constant. PSI is
+the primary page/alert gate; KS is reported alongside it to distinguish location shifts from shape
+changes.
+
+### Azure schedule and alert setup
+
+The schedule definition is under `monitoring/azureml/`. It runs daily at 02:00 UTC and compares the
+latest registered reference and current-window CSV assets. Before creating it, register the
+`itcs355-lab4-drift` environment, set the real compute name and data asset names in
+`drift-pipeline.yml`, provide an authenticated TLS Pushgateway URL, and configure the Key Vault URL.
+The Azure ML job's managed identity needs permission to read the two assets and the two Key Vault
+secrets named for the Slack webhook and Pushgateway token. The current production feature window must
+also be exported and registered as `itcs355-current-inputs` before each run; this checkout does not
+create that production export.
+
+From PowerShell, after `az login` and after filling in the workspace and asset prerequisites:
+
+```powershell
+Push-Location monitoring/azureml
+az ml environment create --file environment.yml --resource-group <RESOURCE_GROUP> --workspace-name <WORKSPACE>
+az ml schedule create --file drift-schedule.yml --resource-group <RESOURCE_GROUP> --workspace-name <WORKSPACE>
+Pop-Location
+```
+
+Those commands create billable Azure ML resources and were not run. Once configured, run
+`python scripts/teardown_lab4.py` or `make teardown` to disable and delete only the named Lab 4
+schedule tagged `course=itcs355, lab=4`. It does not delete the shared workspace, compute, data assets,
+or any Lab 1–3 resources. The existing Lab 3 cleanup remains available as `make teardown-lab3`.
+
+### GitHub staging setup and required graded evidence
+
+CI runs for pull requests and pushes to `main`. CD checks out the exact successful `main` SHA, builds
+and pushes the `itcs355-serve:<SHA>` image, updates the pre-created staging Container App, and smoke
+tests readiness plus a prediction. Configure an Azure federated identity for the GitHub repository's
+`staging` environment and give it only the required ACR push and staging-app deployment permissions.
+Add GitHub Actions secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, and these
+repository variables: `AZURE_RESOURCE_GROUP`, `ACR_NAME`, `ACR_LOGIN_SERVER`, `ACA_NAME`,
+`MODEL_REGISTRY_NAME`, and `MODEL_VERSION`. The staging app must already have an identity that can
+pull from ACR and read the selected MLflow model, plus an ACA secret named `mlflow-tracking-uri`.
+
+Two assignment artifacts still need your accounts: (1) create a temporary PR that deliberately
+breaks a data contract, save its failing Actions run and named assertion, then close it without
+merging; (2) configure the real recent-input export, Azure ML schedule, Pushgateway, and Slack Key
+Vault secret, then capture the real alert timestamp and dashboard. They cannot be truthfully
+substituted by this local simulation. Use the five-line postmortem template in
+[`reports/lab4-drift.md`](reports/lab4-drift.md) after that cloud run.
+
+---
+
 # ITCS355 Lab 3 — Serving, Load Testing, and Rollback
 
 This is a separate Lab 3 checkout, based on the completed Lab 2 branch. It adds a registry-backed
@@ -82,7 +195,7 @@ and verified rollback. The cold-start report separately records scale-out and wa
 | Cost / 1,000 and batch break-even | `reports/lab3-cost.md`; retail-price estimate, reconcile with actual Azure billing |
 | Cloud deletion | `scripts/manage_azure.py teardown`; verified no Lab 3 app, identity, or environment remains |
 
-The unit tests do not create cloud resources. `make teardown` is scoped to exact Lab 3 tags; it
+The unit tests do not create cloud resources. `make teardown-lab3` is scoped to exact Lab 3 tags; it
 leaves Lab 2 jobs, models, ACR, and unrelated resources untouched. Azure Cost Analysis may update
 after teardown rather than immediately.
 

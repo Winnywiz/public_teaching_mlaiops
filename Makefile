@@ -22,7 +22,7 @@ HOURLY_RATE_THB ?=
 THROUGHPUT_RPS ?=
 BATCH_COST_PER_1000_THB ?=
 
-.PHONY: help setup cloud-check data test portability-audit train image image-push reproduce verify clean teardown teardown-lab2 \
+.PHONY: help setup cloud-check scan-secrets data test portability-audit train image image-push reproduce verify clean teardown teardown-lab2 teardown-lab3 teardown-lab4 \
         tune train-remote compare register-model reload-check serve serve-image serve-image-push aca-env-create deploy smoke \
         canary-model canary loadtest payload-test batch-test cold-start-test cost-report aca-identity-create drift inject-drift pipeline cost swap-check llm-eval llm-gate
 
@@ -33,6 +33,9 @@ setup: ## Install dependencies and print environment status
 	python -m pip install --upgrade pip
 	pip install -r requirements.txt
 	@echo "environment ok"
+
+scan-secrets: ## Scan the working tree and every reachable Git-history blob
+	python scripts/scan_secrets.py
 
 cloud-check: ## Resolve the eight capability slots
 	python scripts/cloud_check.py
@@ -66,7 +69,12 @@ reproduce: data image ## THE ONE COMMAND. Grader runs this.
 verify: ## Check the produced metric against the README claim
 	python scripts/verify_metric.py
 
-teardown: ## Delete only resources tagged course=itcs355 and lab=3
+teardown: teardown-lab4 ## Disable and delete only the Lab 4 drift schedule
+
+teardown-lab4: ## Disable and delete only the named Lab 4 Azure ML schedule
+	python scripts/teardown_lab4.py
+
+teardown-lab3: ## Delete only resources tagged course=itcs355 and lab=3
 	python -c "from src import config; from cloudlayer.factory import get_adapter; \
 	cfg=config.load(strict=False); \
 	print('No Azure Lab 3 resources configured; nothing deleted.' if cfg.provider != 'azure' else get_adapter(cfg).teardown(cfg.tags(3)))"

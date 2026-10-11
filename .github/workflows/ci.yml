@@ -19,6 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Secret scanning must see deleted files and earlier commits, not only HEAD.
+          fetch-depth: 0
+
+      - name: Scan full Git history for secrets
+        run: make scan-secrets
 
       - uses: actions/setup-python@v5
         with:
@@ -28,8 +34,7 @@ jobs:
       - name: Install
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
-          # TODO(Lab 4): once requirements.txt carries hashes, add --require-hashes.
+          pip install --require-hashes -r requirements.txt
 
       - name: Lint
         # ruff is pinned in requirements.txt and installed above. Installing it unpinned
@@ -51,6 +56,9 @@ jobs:
       - name: Service tests
         run: pytest -q tests/test_service.py
 
+      - name: Monitoring tests
+        run: pytest -q tests/test_monitoring.py
+
   build:
     needs: test
     runs-on: ubuntu-latest
@@ -70,7 +78,7 @@ jobs:
       - name: Install
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.txt
 
       - name: Build training image
         run: docker buildx build --platform linux/amd64 -t itcs355:${{ github.sha }} --load .
@@ -94,7 +102,10 @@ jobs:
           curl -sf -X POST localhost:8080/predict \
             -H 'content-type: application/json' \
             -d '{"temp_c":78.4,"vibration_mm_s":3.1,"pressure_kpa":315.2,"hours_since_service":4200,"load_pct":68,"ambient_humidity":55}' \
-            | tee /dev/stderr | grep -q probability
+            | tee /dev/stderr \
+            | jq -e --arg expected "${{ github.sha }}" \
+                '.probability >= 0 and .probability <= 1 and .model_version == $expected and (.request_id | length > 0)'
+          curl -sf localhost:8080/metrics | grep -q 'http_requests_total'
           docker stop svc
 
       # Images are tagged with the commit SHA, never `latest`. A `latest` tag makes it

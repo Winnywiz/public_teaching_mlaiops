@@ -164,6 +164,7 @@ azure-core==1.41.0 \
     --hash=sha256:f46ff5dfcd230f25cf1c19e8a34b8dc08a337b2503e268bb600a16c00db8ad5a
     # via
     #   azure-identity
+    #   azure-keyvault-secrets
     #   azure-mgmt-core
     #   azure-storage-blob
     #   azureml-mlflow
@@ -171,7 +172,13 @@ azure-core==1.41.0 \
 azure-identity==1.25.3 \
     --hash=sha256:ab23c0d63015f50b630ef6c6cf395e7262f439ce06e5d07a64e874c724f8d9e6 \
     --hash=sha256:f4d0b956a8146f30333e071374171f3cfa7bdb8073adb8c3814b65567aa7447c
-    # via azureml-mlflow
+    # via
+    #   -r requirements.in
+    #   azureml-mlflow
+azure-keyvault-secrets==4.11.3 \
+    --hash=sha256:193ba3cf9912ae776fb1ba40d147aa3cbfcf5cda5e0e2e35ef8fbe4c78db1217 \
+    --hash=sha256:c77cc80f33d07e1b8cbbda5e7b6b8a1da1471ca917796f9895603a0c2b5f9c2f
+    # via -r requirements.in
 azure-mgmt-core==1.6.0 \
     --hash=sha256:0460d11e85c408b71c727ee1981f74432bc641bb25dfcf1bb4e90a49e776dbc4 \
     --hash=sha256:b26232af857b021e61d813d9f4ae530465255cb10b3dde945ad3743f7a58e79c
@@ -966,9 +973,6 @@ greenlet==3.5.5 \
     --hash=sha256:f7278591501941bb2456af102bb9cd59aab48c6cfd6e2dd68fa1290bb0c49a42 \
     --hash=sha256:fef01bd457f11fc158b130ca0027a3c365693280e8e231b65bdaf57999f39f5b
     # via sqlalchemy
-gunicorn==26.2.0; platform_system != "Windows" \
-    --hash=sha256:bd249d0b3f7972f7432f0a6b6ff3b3ee2d129f70cd1ff6c09a9dd9e29a2b88e3
-    # via mlflow
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
@@ -1007,6 +1011,7 @@ isodate==0.7.2 \
     --hash=sha256:28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15 \
     --hash=sha256:4cd1aa0f43ca76f4a6c6c0292a85f40b35ec2e43e315b59f06e6d32171a953e6
     # via
+    #   azure-keyvault-secrets
     #   azure-storage-blob
     #   msrest
 itsdangerous==2.2.0 \
@@ -2172,7 +2177,7 @@ pytz==2025.2 \
     # via
     #   azureml-mlflow
     #   pandas
-pywin32==312; sys_platform == "win32" \
+pywin32==312 \
     --hash=sha256:02ebca0f0242b75292e218065004310d6a477407c09fa449bfe4f6022bc0c0fc \
     --hash=sha256:17948aeadbdb091f0ced6ef0841620794e68327b94ee415571c1203594b7215c \
     --hash=sha256:3020656e34f1cf7faeb7bccd2b84653a607c6ff0c55ada85e6487d61716deabd \
@@ -2517,6 +2522,7 @@ typing-extensions==4.16.0 \
     #   anyio
     #   azure-core
     #   azure-identity
+    #   azure-keyvault-secrets
     #   azure-storage-blob
     #   fastapi
     #   graphene

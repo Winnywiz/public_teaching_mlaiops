@@ -14,3 +14,5 @@ ruff==0.16.6
 fastapi==0.141.1
 httpx2==2.12.0
 boto3==1.43.93
+azure-identity==1.25.3
+azure-keyvault-secrets==4.11.3

@@ -1,0 +1,14 @@
+$schema: https://azuremlschemas.azureedge.net/latest/schedule.schema.json
+name: itcs355-lab4-weekly-drift
+display_name: ITCS355 daily production drift check
+description: Compare the latest production feature window with the registered training reference.
+tags:
+  course: itcs355
+  lab: "4"
+
+trigger:
+  type: cron
+  expression: "0 2 * * *"
+  time_zone: UTC
+
+create_job: ./drift-pipeline.yml

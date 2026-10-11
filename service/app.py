@@ -19,8 +19,9 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
+from monitoring import metrics
 from service.schemas import BatchRequest, BatchResponse, PredictRequest, PredictResponse
 
 logging.basicConfig(
@@ -135,7 +136,16 @@ async def add_request_context(request: Request, call_next):
     request.state.request_id = request_id
     started = time.perf_counter()
     request.state.started_at = started
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        metrics.observe_request(
+            request.method,
+            request.url.path,
+            500,
+            (time.perf_counter() - started) * 1000,
+        )
+        raise
     latency_ms = (time.perf_counter() - started) * 1000
     response.headers["x-request-id"] = request_id
     response.headers["x-model-version"] = str(STATE["version"])
@@ -168,6 +178,7 @@ async def add_request_context(request: Request, call_next):
         latency_ms=round(latency_ms, 3),
         model_version=str(STATE["version"]),
     )
+    metrics.observe_request(request.method, request.url.path, response.status_code, latency_ms)
     return response
 
 
@@ -231,6 +242,15 @@ def ready():
     return {"status": "ready", "model_version": str(STATE["version"])}
 
 
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics():
+    """Prometheus scrape endpoint with request, latency, feature-window, and model metrics."""
+    return PlainTextResponse(
+        metrics.render_prometheus(str(STATE["version"])),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
 def _score(rows: list[dict]) -> list[float]:
     if STATE["model"] is None:
         raise HTTPException(status_code=503, detail="model not loaded")
@@ -239,7 +259,9 @@ def _score(rows: list[dict]) -> list[float]:
     from src.data import FEATURES
 
     frame = pd.DataFrame(rows)[FEATURES]
-    return [float(p) for p in STATE["model"].predict_proba(frame)[:, 1]]
+    probabilities = [float(p) for p in STATE["model"].predict_proba(frame)[:, 1]]
+    metrics.observe_features(rows)
+    return probabilities
 
 
 @app.post("/predict", response_model=PredictResponse)
