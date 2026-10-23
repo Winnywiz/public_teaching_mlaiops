@@ -8,54 +8,22 @@ report both, because a real system has both.
 
 Three levers move an LLM bill, in the order they are worth pulling:
 
-  1. Output length.   Output tokens cost 3-5x input tokens on every provider. Capping
-                      max_output_tokens is the single highest-leverage change available,
-                      and it is one line.
-  2. Prompt caching.  A cached input token is billed at roughly a tenth of a fresh one.
-                      Worth having only when a long prefix is genuinely stable.
+  1. Output length.   Output tokens can cost several times more than input tokens.
+                      Verify the exact model's rate, then evaluate an output cap.
+  2. Prompt caching.  Cached input rates and cache-write premiums vary by provider.
+                      Supply the exact factors; measure actual cached-token usage.
   3. Model choice.    A smaller model is often 10-20x cheaper. Whether it is good enough
                       is an evaluation question, not a pricing one — which is why
                       scripts/llm_eval.py exists and why you run it before you switch.
 
-Prices are THB per 1,000,000 tokens. They change often and differ by region.
-
-TODO(Lab 5): verify every rate below against your provider's pricing page for YOUR region
-before you cite a cost figure. Record the date you checked in your cost report. A stale
-price presented as current is exactly what the report is designed to catch.
+Prices are THB per 1,000,000 tokens. They change often and differ by model, region, and
+service tier. This module intentionally ships with no provider price table: add the
+rates copied from the actual provider pricing page when running the report. Synthetic
+offline fixtures must never be presented as actual provider usage.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-# THB per 1,000,000 tokens: (input, output).
-TOKEN_PRICE_TABLE: dict[str, dict[str, tuple[float, float]]] = {
-    "local": {"stub": (0.0, 0.0)},
-    "aws": {
-        "small": (9.0, 36.0),
-        "medium": (108.0, 540.0),
-        "large": (540.0, 2700.0),
-    },
-    "azure": {
-        "small": (9.5, 38.0),
-        "medium": (112.0, 550.0),
-        "large": (550.0, 2750.0),
-    },
-    "gcp": {
-        "small": (8.5, 34.0),
-        "medium": (105.0, 525.0),
-        "large": (525.0, 2625.0),
-    },
-}
-
-# A cache hit is billed at this fraction of the normal input rate. Roughly right on all
-# three providers; verify it, like everything else here.
-CACHE_READ_FACTOR = 0.10
-
-# Cache writes usually cost MORE than a normal input token. A prompt cache on a prefix
-# that changes every request is a way to pay extra for nothing, and it is a common and
-# expensive mistake.
-CACHE_WRITE_FACTOR = 1.25
-
 
 @dataclass(frozen=True)
 class Usage:
@@ -77,75 +45,105 @@ class Usage:
             )
 
 
-def token_rates(provider: str, model: str) -> tuple[float, float]:
-    """THB per 1M input and output tokens. Raises rather than guessing."""
-    table = TOKEN_PRICE_TABLE.get(provider.lower())
-    if table is None:
+def token_rates(
+    provider: str, model: str, *, rates: tuple[float, float] | None = None
+) -> tuple[float, float]:
+    """Return THB per 1M input/output tokens, refusing to invent missing prices."""
+    if rates is None:
         raise KeyError(
-            f"No token price table for provider {provider!r}. Add it to src/llmcost.py."
+            f"No verified token rates supplied for {provider}/{model}. Copy the exact "
+            "model's current regional input/output prices into the report command."
         )
-    if model not in table:
-        raise KeyError(
-            f"No token rates for {model!r} on {provider}. Known: {sorted(table)}. "
-            "Add the model you actually called — do not substitute a similar one silently."
-        )
-    return table[model]
+    rate_in, rate_out = (float(value) for value in rates)
+    if rate_in < 0 or rate_out < 0:
+        raise ValueError("token rates must not be negative")
+    return rate_in, rate_out
 
 
-def request_cost(provider: str, model: str, usage: Usage) -> float:
+def request_cost(
+    provider: str, model: str, usage: Usage, *, rates: tuple[float, float] | None = None,
+    cache_read_factor: float | None = None,
+) -> float:
     """THB for a single request, cache discount included."""
-    rate_in, rate_out = token_rates(provider, model)
+    rate_in, rate_out = token_rates(provider, model, rates=rates)
+    if usage.cached_input_tokens:
+        if cache_read_factor is None:
+            raise ValueError("provide the provider's cached-input price factor for cached usage")
+        if not 0 <= cache_read_factor < 1:
+            raise ValueError("cache_read_factor must be a discount in [0, 1)")
     fresh_input = usage.input_tokens - usage.cached_input_tokens
     thb = (
         fresh_input * rate_in
-        + usage.cached_input_tokens * rate_in * CACHE_READ_FACTOR
+        + usage.cached_input_tokens * rate_in * (cache_read_factor or 0.0)
         + usage.output_tokens * rate_out
     )
     return thb / 1_000_000
 
 
-def cost_per_1k_requests(provider: str, model: str, usage: Usage) -> float:
+def cost_per_1k_requests(
+    provider: str, model: str, usage: Usage, *, rates: tuple[float, float] | None = None,
+    cache_read_factor: float | None = None,
+) -> float:
     """THB per 1,000 requests at this average usage.
 
     The unit the rest of the course reports in, so an LLM path and a classifier path can
     be compared on the same axis in your cost report.
     """
-    return request_cost(provider, model, usage) * 1000
+    return request_cost(
+        provider, model, usage, rates=rates, cache_read_factor=cache_read_factor
+    ) * 1000
 
 
-def monthly_thb(provider: str, model: str, usage: Usage, requests_per_day: float) -> float:
+def monthly_thb(
+    provider: str, model: str, usage: Usage, requests_per_day: float,
+    *, rates: tuple[float, float] | None = None, cache_read_factor: float | None = None,
+) -> float:
     """THB per 30-day month at a steady request rate."""
     if requests_per_day < 0:
         raise ValueError("requests_per_day must not be negative")
-    return request_cost(provider, model, usage) * requests_per_day * 30
+    return request_cost(
+        provider, model, usage, rates=rates, cache_read_factor=cache_read_factor
+    ) * requests_per_day * 30
 
 
-def output_cap_saving(provider: str, model: str, usage: Usage, capped_output: int) -> float:
+def output_cap_saving(
+    provider: str, model: str, usage: Usage, capped_output: int,
+    *, rates: tuple[float, float] | None = None, cache_read_factor: float | None = None,
+) -> float:
     """THB per 1,000 requests saved by capping output length.
 
-    Run this before you optimise anything else. On most assistant workloads it beats both
-    caching and a model downgrade, and unlike a downgrade it cannot change your answers'
-    correctness — only their length.
+    Compare this against a real provider run. A cap changes output length and may truncate
+    answers, so the golden-set gate must still pass before calling it an optimisation.
     """
     if capped_output < 0:
         raise ValueError("capped_output must not be negative")
     if capped_output >= usage.output_tokens:
         return 0.0
     capped = Usage(usage.input_tokens, capped_output, usage.cached_input_tokens)
-    return cost_per_1k_requests(provider, model, usage) - cost_per_1k_requests(
-        provider, model, capped
+    return cost_per_1k_requests(
+        provider, model, usage, rates=rates, cache_read_factor=cache_read_factor
+    ) - cost_per_1k_requests(
+        provider, model, capped, rates=rates, cache_read_factor=cache_read_factor
     )
 
 
-def cache_breakeven_hit_rate(provider: str, model: str, prefix_tokens: int) -> float:
+def cache_breakeven_hit_rate(
+    provider: str, model: str, prefix_tokens: int, *,
+    cache_read_factor: float,
+    cache_write_factor: float,
+) -> float:
     """Cache hit rate above which prompt caching starts paying for itself.
 
-    Below this, the write surcharge on misses costs more than the reads save. Report it
-    alongside your measured hit rate; a cache defended without this number is a guess.
+    With the supplied provider factors, return the hit rate above which caching saves
+    money. Report it alongside provider-measured cached tokens, not fixture data.
     """
     if prefix_tokens <= 0:
         raise ValueError("prefix_tokens must be positive")
-    token_rates(provider, model)  # validate provider and model early
-    saving_per_hit = 1.0 - CACHE_READ_FACTOR
-    extra_per_miss = CACHE_WRITE_FACTOR - 1.0
+    if not provider or not model:
+        raise ValueError("provider and model are required to identify cache pricing")
+    if (not 0 <= cache_read_factor < 1 or not cache_write_factor >= 1
+            or cache_write_factor == float("inf")):
+        raise ValueError("cache factors must describe a discount and a finite write premium")
+    saving_per_hit = 1.0 - cache_read_factor
+    extra_per_miss = cache_write_factor - 1.0
     return extra_per_miss / (saving_per_hit + extra_per_miss)

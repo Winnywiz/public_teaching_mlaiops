@@ -34,5 +34,6 @@ USER runner
 
 # Credentials NEVER enter an image layer. They arrive at runtime from SECRET_STORE_PATH
 # or from the platform's identity. If you find yourself adding an ARG for a key, stop.
-ENTRYPOINT ["python", "-m", "src.train"]
-CMD ["--n-estimators", "200", "--max-depth", "8"]
+# Keep a runnable default for the Labs 1–3 `docker run` workflow, while allowing
+# Azure ML command jobs to replace CMD with any pipeline-step command.
+CMD ["python", "-m", "src.train", "--n-estimators", "200", "--max-depth", "8"]

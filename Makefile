@@ -21,10 +21,16 @@ UTILIZATION ?= 0.25
 HOURLY_RATE_THB ?=
 THROUGHPUT_RPS ?=
 BATCH_COST_PER_1000_THB ?=
+PRICE_SOURCE ?=
+BILLING_SOURCE ?=
+SWAP_BLOB_URI ?=
+SWAP_ENDPOINT ?=
+SWAP_PAYLOAD ?=
+SWAP_REGION ?=
 
-.PHONY: help setup cloud-check scan-secrets data test portability-audit train image image-push reproduce verify clean teardown teardown-lab2 teardown-lab3 teardown-lab4 \
+.PHONY: help setup cloud-check scan-secrets data test portability-audit train image image-push reproduce verify clean teardown teardown-lab2 teardown-lab3 teardown-lab4 teardown-lab5 \
         tune train-remote compare register-model reload-check serve serve-image serve-image-push aca-env-create deploy smoke \
-        canary-model canary loadtest payload-test batch-test cold-start-test cost-report aca-identity-create drift inject-drift pipeline cost swap-check llm-eval llm-gate
+        canary-model canary loadtest payload-test batch-test cold-start-test cost-report aca-identity-create drift inject-drift pipeline cost swap-check llm-eval llm-gate llm-live
 
 help:
 	@grep -E "^[a-zA-Z_-]+:.*?## .*$$" $(MAKEFILE_LIST) | awk -F":.*?## " "{printf \"  %-20s %s\\n\", \$$1, \$$2}"
@@ -64,7 +70,7 @@ reproduce: data image ## THE ONE COMMAND. Grader runs this.
 	  -v "$$PWD/data:/app/data:ro" \
 	  -v "$$PWD/reports:/app/reports" \
 	  -e MLFLOW_TRACKING_URI=sqlite:////app/reports/mlflow.db \
-	  $(IMAGE):$(TAG) --seed $(SEED) --metrics-out /app/reports/metrics.json
+	  $(IMAGE):$(TAG) python -m src.train --seed $(SEED) --metrics-out /app/reports/metrics.json
 
 verify: ## Check the produced metric against the README claim
 	python scripts/verify_metric.py
@@ -73,6 +79,9 @@ teardown: teardown-lab4 ## Disable and delete only the Lab 4 drift schedule
 
 teardown-lab4: ## Disable and delete only the named Lab 4 Azure ML schedule
 	python scripts/teardown_lab4.py
+
+teardown-lab5: ## Remove only exact-tagged Lab 5 Azure schedule, app, environment, and compute
+	python scripts/teardown_verify.py --lab 5
 
 teardown-lab3: ## Delete only resources tagged course=itcs355 and lab=3
 	python -c "from src import config; from cloudlayer.factory import get_adapter; \
@@ -163,7 +172,7 @@ drift: ## Score drift against the reference window
 # --- Lab 5 -------------------------------------------------------------------
 pipeline: ## Compile pipeline/pipeline.yaml for your provider
 	python -c "from cloudlayer.pipelines import compile_for; from src import config; \
-	compile_for(config.load().provider)"
+	print(compile_for(config.load().provider))"
 
 llm-eval: ## Run the LLM golden set against recorded responses (offline, free)
 	python scripts/llm_eval.py --out reports/llm_eval-baseline.json
@@ -173,8 +182,15 @@ llm-gate: ## Prove the gate fails on a degraded set — expected to exit non-zer
 	python scripts/llm_eval.py --responses evals/fixtures/triage-regressed.jsonl \
 	  --out reports/llm_eval.json --baseline reports/llm_eval-baseline.json
 
+llm-live: ## Call the configured LLM deployment (may incur token charges)
+	python scripts/llm_eval.py --live --out reports/llm_eval-live.json
+
 cost: ## Build the cost report
-	python scripts/cost_report.py --estimate $(EST) --actual $(ACT) --rps $(RPS) --instance $(INSTANCE)
+	python scripts/cost_report.py --estimate $(EST) --actual $(ACT) --rps $(RPS) \
+	  --instance "$(INSTANCE)" --hourly-rate-thb $(HOURLY_RATE_THB) \
+	  --price-source "$(PRICE_SOURCE)" --billing-source "$(BILLING_SOURCE)"
 
 swap-check: ## Prove the portability seam against a second provider
-	python scripts/portability_swap_check.py --second-provider $(SECOND)
+	python scripts/portability_swap_check.py --second-provider $(SECOND) \
+	  --second-blob-uri "$(SWAP_BLOB_URI)" --invoke-endpoint "$(SWAP_ENDPOINT)" \
+	  --payload "$(SWAP_PAYLOAD)" $(if $(SWAP_REGION),--region "$(SWAP_REGION)",)

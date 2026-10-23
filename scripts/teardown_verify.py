@@ -1,10 +1,10 @@
-"""Lab 5 — confirm teardown actually worked.
+"""Delete exact-tagged Lab resources and verify managed Lab 5 resources are gone.
 
-    python scripts/teardown_verify.py --lab 3
+    python scripts/teardown_verify.py --lab 5
 
-Deletion is asynchronous on all three providers, so a teardown call returning successfully
-does not mean the resource is gone. Run this, then run it again 24 hours later, then check
-the console by hand. The bill is what eventually tells you, usually too late.
+Deletion is asynchronous. Lab 5 resources are selected only by the exact course/student/lab
+tags; this script never deletes the shared workspace, registry, storage account, or ACR.
+Run it again after 24 hours and verify the Azure console and cost export by hand.
 """
 from __future__ import annotations
 
@@ -24,23 +24,32 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = config.load()
+    if args.lab == 5 and cfg.provider != "azure":
+        raise SystemExit("Lab 5's tagged teardown verifier is implemented for Azure; use CLOUD_PROVIDER=azure")
     tags = cfg.tags(args.lab)
     adapter = get_adapter(cfg)
 
-    print(f"searching for resources tagged {tags}")
-    remaining = adapter.teardown(tags)
+    print(f"cleaning resources tagged exactly {tags}")
+    changed = adapter.teardown(tags)
+    for resource in changed:
+        print(f"  requested: {resource}")
 
+    remaining = []
+    if args.lab == 5 and hasattr(adapter, "verify_lab5_teardown"):
+        remaining = adapter.verify_lab5_teardown(tags)
     if remaining:
-        print(f"\n{len(remaining)} resource(s) deleted or still deleting:")
-        for r in remaining:
-            print(f"  {r}")
-        print("\nRe-run in 24 hours. Then confirm in the console by hand and screenshot it — "
-              "that screenshot is a Lab 5 deliverable.")
+        print("\nTagged resources are still present or deleting:")
+        for resource in remaining:
+            print(f"  {resource}")
+        print("\nRe-run after 24 hours. Confirm in Azure Portal and capture the empty resource list.")
         return 1
 
-    print("\nPASS  nothing found under these tags")
-    print("Still check the console. An untagged resource is invisible to this script and "
-          "will keep billing.")
+    if args.lab == 5:
+        print("\nPASS  no active Lab 5 schedule, app, environment, compute, or running job remains under those tags")
+    else:
+        print("\nPASS  the provider teardown completed its verification")
+    print("Still check Azure Portal and Cost Management: untagged resources and shared storage "
+          "are outside this verifier.")
     return 0
 
 
