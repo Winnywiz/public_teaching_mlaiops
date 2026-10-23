@@ -35,7 +35,12 @@ def _load_env_file(path: Path = ENV_FILE) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+        value = value.strip()
+        # Support the inline guidance used in cloud.env.example while preserving literal
+        # '#' characters unless they begin a whitespace-separated comment.
+        if " #" in value:
+            value = value.split(" #", 1)[0].rstrip()
+        os.environ.setdefault(key.strip(), value)
 
 
 _load_env_file()

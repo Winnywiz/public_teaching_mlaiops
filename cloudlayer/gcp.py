@@ -19,7 +19,7 @@ from cloudlayer.base import CloudAdapter
 
 
 class GcpAdapter(CloudAdapter):
-    def upload(self, local_path: str, key: str) -> str:
+    def upload(self, local_path: str, key: str, *, lab: int = 1) -> str:
         raise NotImplementedError("TODO Lab 1: blob.upload_from_filename, return the gs:// URI")
 
     def download(self, uri: str, local_path: str) -> None:

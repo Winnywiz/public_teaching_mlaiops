@@ -1,55 +1,123 @@
-# Lab 5 — pipeline as a neutral DAG.
-#
-# This file describes WHAT runs. cloudlayer/pipelines.py compiles it into SageMaker
-# Pipelines, Azure ML Pipelines, or Vertex AI Pipelines. Keeping the DAG here rather than
-# in provider SDK calls is what makes the pipeline portable, and it is why every step is
-# a container rather than a function.
-
-name: itcs355-training-pipeline
-schedule: "0 2 * * 0"          # TODO(Lab 5): justify this in your README, or change it
-
-steps:
-  - name: ingest
-    image: "${CONTAINER_REGISTRY}/itcs355:${IMAGE_TAG}"
-    command: ["python", "scripts/make_dataset.py"]
-    outputs: [raw_data]
-
-  - name: validate
-    image: "${CONTAINER_REGISTRY}/itcs355:${IMAGE_TAG}"
-    command: ["pytest", "-q", "tests/test_data.py"]
-    depends_on: [ingest]
-    on_failure: abort
-    # Aborting here is the point. A pipeline that trains on data failing its own contract
-    # produces a model nobody should trust, and it will do so silently.
-
-  - name: train
-    image: "${CONTAINER_REGISTRY}/itcs355:${IMAGE_TAG}"
-    command: ["python", "-m", "src.train", "--metrics-out", "/outputs/metrics.json"]
-    depends_on: [validate]
-    instance: "${TRAIN_INSTANCE}"
-    spot: true
-    outputs: [model, metrics]
-
-  - name: evaluate
-    image: "${CONTAINER_REGISTRY}/itcs355:${IMAGE_TAG}"
-    command: ["python", "scripts/evaluation_gate.py", "--metrics", "/outputs/metrics.json"]
-    depends_on: [train]
-    outputs: [gate_decision]
-
-  - name: register
-    image: "${CONTAINER_REGISTRY}/itcs355:${IMAGE_TAG}"
-    command: ["python", "scripts/register.py"]
-    depends_on: [evaluate]
-    condition: "gate_decision == 'pass'"
-    # TODO(Lab 5): a pipeline that registers unconditionally has no gate. The condition
-    # must be real, and the grader will try to make it fail.
-
-  - name: deploy_staging
-    image: "${CONTAINER_REGISTRY}/itcs355:${IMAGE_TAG}"
-    command: ["python", "scripts/deploy.py", "--target", "staging"]
-    depends_on: [register]
+# Provider-neutral DAG; cloudlayer.pipelines compiles the Azure branch to CLI v2 YAML.
+name: itcs355-lab5-managed-pipeline
+schedule: "0 2 * * 0"  # weekly Sunday, 02:00 UTC; see the retraining comparison in README
+image: "${PIPELINE_IMAGE_URI}"
+compute: "${AZURE_ML_COMPUTE}"
+spot_compute: "${AZURE_ML_SPOT_COMPUTE}"
 
 tags:
   course: itcs355
   student: "${PROJECT_ID}"
   lab: "5"
+
+# Non-secret capability references are injected into every command step. Azure credentials
+# are obtained from the managed identity; cloud.env and tokens are not copied into the image.
+environment_variables:
+  CLOUD_PROVIDER: azure
+  PROJECT_ID: "${PROJECT_ID}"
+  REGION: "${REGION}"
+  BLOB_URI: "${BLOB_URI}"
+  CONTAINER_REGISTRY: "${CONTAINER_REGISTRY}"
+  MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI}"
+  MODEL_REGISTRY_NAME: "${MODEL_REGISTRY_NAME}"
+  IDENTITY_REF: "${IDENTITY_REF}"
+  AZURE_SUBSCRIPTION_ID: "${AZURE_SUBSCRIPTION_ID}"
+  AZURE_RESOURCE_GROUP: "${AZURE_RESOURCE_GROUP}"
+  AZURE_ML_WORKSPACE: "${AZURE_ML_WORKSPACE}"
+  AZURE_STORAGE_ACCOUNT: "${AZURE_STORAGE_ACCOUNT}"
+  AZURE_STORAGE_CONTAINER: "${AZURE_STORAGE_CONTAINER}"
+  AZURE_ACR_NAME: "${AZURE_ACR_NAME}"
+  AZURE_ML_COMPUTE: "${AZURE_ML_COMPUTE}"
+  AZURE_ML_SPOT_COMPUTE: "${AZURE_ML_SPOT_COMPUTE}"
+  SERVING_IMAGE_URI: "${SERVING_IMAGE_URI}"
+  AZURE_LAB5_CONTAINERAPP_ENVIRONMENT: "${AZURE_LAB5_CONTAINERAPP_ENVIRONMENT}"
+  AZURE_LAB5_CONTAINERAPP_NAME: "${AZURE_LAB5_CONTAINERAPP_NAME}"
+  AZURE_LAB5_CONTAINERAPP_IDENTITY: "${AZURE_LAB5_CONTAINERAPP_IDENTITY}"
+  AZURE_LAB5_TRAINING_IDENTITY_CLIENT_ID: "${AZURE_LAB5_TRAINING_IDENTITY_CLIENT_ID}"
+  AZURE_LAB5_JOB_IDENTITY_CLIENT_ID: "${AZURE_LAB5_JOB_IDENTITY_CLIENT_ID}"
+
+steps:
+  - name: ingest
+    command: "python scripts/make_dataset.py --out '${{outputs.raw_data}}/sensors.csv'"
+    identity:
+      type: managed
+    outputs:
+      raw_data: uri_folder
+
+  - name: validate
+    command: >-
+      python scripts/validate_pipeline_data.py
+      --data '${{inputs.raw_data}}/sensors.csv'
+      --receipt '${{outputs.validated}}'
+    depends_on: [ingest]
+    identity:
+      type: managed
+    inputs:
+      raw_data: "${{parent.jobs.ingest.outputs.raw_data}}"
+    outputs:
+      validated: uri_file
+
+  - name: train
+    command: >-
+      python -m src.train
+      --data-path '${{inputs.raw_data}}/sensors.csv'
+      --model-out '${{outputs.model}}/model.joblib'
+      --checkpoint-dir '${{outputs.checkpoints}}'
+      --metrics-out '${{outputs.metrics}}/metrics.json'
+      --training-job-id '${{name}}'
+      --image-digest '${PIPELINE_IMAGE_URI}'
+      --instance-type '${AZURE_ML_SPOT_COMPUTE}'
+      --spot
+    depends_on: [validate]
+    spot: true
+    identity:
+      type: managed
+    environment_variables:
+      AZURE_CLIENT_ID: "${AZURE_LAB5_TRAINING_IDENTITY_CLIENT_ID}"
+    inputs:
+      raw_data: "${{parent.jobs.ingest.outputs.raw_data}}"
+      validation_receipt: "${{parent.jobs.validate.outputs.validated}}"
+    outputs:
+      model: uri_folder
+      checkpoints: uri_folder
+      metrics: uri_folder
+
+  - name: evaluate
+    command: >-
+      python scripts/evaluation_gate.py
+      --metrics '${{inputs.metrics}}/metrics.json'
+      --decision-out '${{outputs.gate}}'
+    depends_on: [train]
+    identity:
+      type: managed
+    inputs:
+      metrics: "${{parent.jobs.train.outputs.metrics}}"
+    outputs:
+      gate: uri_file
+
+  - name: register
+    command: >-
+      python scripts/pipeline_register.py
+      --metrics '${{inputs.metrics}}/metrics.json'
+      --gate '${{inputs.gate}}'
+      --out '${{outputs.registration}}'
+    depends_on: [evaluate]
+    identity:
+      type: managed
+    inputs:
+      metrics: "${{parent.jobs.train.outputs.metrics}}"
+      gate: "${{parent.jobs.evaluate.outputs.gate}}"
+    outputs:
+      registration: uri_file
+
+  - name: deploy_staging
+    command: >-
+      python scripts/pipeline_deploy_staging.py
+      --registration '${{inputs.registration}}'
+    depends_on: [register]
+    identity:
+      type: managed
+    inputs:
+      registration: "${{parent.jobs.register.outputs.registration}}"
+    environment_variables:
+      AZURE_CLIENT_ID: "${AZURE_LAB5_JOB_IDENTITY_CLIENT_ID}"

@@ -25,7 +25,7 @@ class CloudAdapter(ABC):
 
     # --- Lab 1 ---------------------------------------------------------------
     @abstractmethod
-    def upload(self, local_path: str, key: str) -> str:
+    def upload(self, local_path: str, key: str, *, lab: int = 1) -> str:
         """Upload a file under BLOB_URI. Returns the full URI of the stored object."""
 
     @abstractmethod
@@ -112,7 +112,7 @@ class LocalAdapter(CloudAdapter):
     Lab 1 must upload to real object storage and push to a real registry.
     """
 
-    def upload(self, local_path: str, key: str) -> str:
+    def upload(self, local_path: str, key: str, *, lab: int = 1) -> str:
         import shutil
         from pathlib import Path
 

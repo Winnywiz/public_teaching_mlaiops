@@ -1,3 +1,66 @@
+# ITCS355 Lab 5 — Cloud MLOps, Cost, and LLM Operations
+
+## Lab 5 — Cloud MLOps, cost, and LLM operations
+
+Lab 5 is maintained in this separate checkout on branch `codex/lab5-cloud-mlops-cost`. The local implementation is prepared, but account-side evidence is deliberately marked pending rather than simulated.
+
+### Implemented and checked locally
+
+- `cloudlayer/pipelines.py` compiles the neutral DAG into Azure ML CLI v2 pipeline and weekly schedule YAML. The graph connects ingest, contract validation, checkpointed training on a separately named low-priority compute target, a real ROC-AUC threshold gate, registration, and Lab 5-only staging deployment. The gate writes its success receipt only after passing. Azure ML is configured to stop downstream work on any failed step, so registration cannot run after a failed evaluation. The compiler writes files only; it does not submit jobs or create resources. Azure ML's pipeline YAML supports inline command jobs and `continue_on_step_failure`; see the [pipeline job schema](https://learn.microsoft.com/en-us/azure/machine-learning/reference-yaml-job-pipeline) and [CLI pipeline guide](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-create-component-pipelines-cli?view=azureml-api-2).
+- The evaluation floor is test ROC-AUC `0.82`, based on the Lab 2 selected model's measured `0.8533` test ROC-AUC. The threshold catches a material drop while leaving room for seed variation. If an incumbent score is supplied, the gate also requires a `0.002` improvement.
+- The Azure adapter can call an existing Azure OpenAI v1 deployment using Entra ID and records provider-returned token counts, cached tokens, and request latency. It fails if actual usage fields are absent. It never estimates tokens from prompt length and does not create an endpoint or deployment.
+- The golden set has 10 cases. Offline baseline/degraded fixtures exercise the per-case regression gate and a safety-refusal failure. AWS now implements the invocation method needed alongside its existing object upload/download methods, with mocked tests that make no AWS calls.
+- `src/llmcost.py` has no invented provider price table. Costs require the exact model's current regional input/output rates. See [`reports/lab5-llm-eval.md`](reports/lab5-llm-eval.md).
+
+### Cloud evidence and required account actions
+
+No Lab 5 job, retraining schedule, staging app, AWS endpoint, or live LLM call has been created from this checkout. I also did not change Azure role assignments, request quota, or create billable resources. The inherited ignored `cloud.env` is retained locally, but it has no Lab 5 spot compute or LLM deployment configured. In the earlier quota check, the Azure for Students subscription showed zero low-priority vCPU quota in Japan East, so the checkpointed spot stage cannot run until the subscription has eligible quota and a suitable compute target.
+
+When Lab 5 resources do exist, use `make teardown-lab5` to remove only resources tagged for this lab. The inherited `make teardown` target is still the Lab 4 drift-schedule cleanup and must not be used as Lab 5 cleanup. The teardown verifier does not remove shared storage, ACR, the workspace, or managed identities; inspect those separately and retain the screenshot of the empty Lab 5 resource list.
+
+Before a cloud run, add the Lab 5 values from `cloud.env.example` to the ignored local `cloud.env`: a digest-pinned training image, an existing `Standard_B2s` general compute target, an existing low-priority training target, two assigned job identities, a separately tagged Lab 5 Container Apps environment/app, and its serving identity. Attach the training identity to the spot target; attach the pipeline/deployment identity to the general target and grant only its required job and staging-app permissions. `PIPELINE_IMAGE_URI` must point to the training image, not the Lab 3 serving image. For live LLM evaluation, set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT` for a deployment you already have, then ensure the signed-in identity is authorized for inference. This repo will not deploy a model to Azure OpenAI.
+
+After those prerequisites are available, `make pipeline` generates `pipeline/generated/azureml-pipeline.yml` and `azureml-schedule.yml`. Review both before submitting with Azure ML CLI. Creating the job and schedule may incur charges. The selected trigger is weekly Sunday at 02:00 UTC, because a seven-day failure-label horizon makes weekly label maturity safer than daily retraining.
+
+| Strategy | When it fits this sensor-failure problem | How it can fail |
+|---|---|---|
+| Fixed schedule (chosen: weekly) | Retrain after the seven-day label horizon so recent examples have time to receive verified outcomes. | It can retrain unnecessarily during stable periods, or wait until the next run after a sudden real change. |
+| Data-volume threshold (5,000 newly validated readings) | Request an earlier run when enough new readings accumulate, but only once their labels have matured. | Duplicate bursts or a fast data spike can trigger on low-quality or not-yet-labelled readings. |
+| Drift-triggered (PSI above 0.20 is a review alert only) | Ask an operator to inspect a sustained feature shift before choosing to retrain. | The worst case is a calibration, unit-conversion, or upstream labeling fault that looks like drift; automatic retraining on that corrupted data can replace a working model with a worse one faster than waiting for the schedule. |
+
+The existing contract gate must pass before training, and the evaluation gate must pass before registration or deployment.
+
+### Identity design (not yet assigned or tested)
+
+| Identity | Minimum intended access | Why |
+|---|---|---|
+| Training job identity | Read the input data container; write only the run's model/metrics/checkpoint outputs; pull the pinned image | Attached only to the low-priority training compute; no staging deployment or registry-approval rights |
+| Serving identity | Pull the serving image; read the selected model artifact; write only runtime logs/metrics | Attached only to the Lab 5 staging app; no training-data or model-registration rights |
+| Pipeline/deployment job identity | Read/write the pipeline's required data and registry artifacts; update only the Lab 5 staging app | Selected on the general compute for the deploy step; no subscription-wide role |
+| CI submitter identity | Push the pinned image to the target ACR; submit the pipeline and schedule | Used by the authorized CLI or CI runner to start the workflow, not passed into the serving container |
+
+No role assignment or permission-removal test has been performed. The assessed test still needs an account owner: remove the training identity's data-read grant, run the validation/ingest stage, record the exact authorization failure, then restore the grant. Keep the staging app, compute, registry, and shared workspace scopes separate.
+
+### Portability write-up
+
+The AWS adapter's upload/download round trip is the smallest part of the swap. `invoke` is the hardest because SageMaker Runtime calls a named endpoint with an AWS-specific request envelope, while the Azure app uses an HTTP `/predict` route; response schemas and model-container contracts can also differ. That is a genuine abstraction leak: this adapter normalizes JSON transport, not model packaging, IAM, endpoint lifecycle, or prediction semantics. A full migration from the current Azure setup would still require several engineering days for identity policies, image/build workflow, registry lineage, pipeline and deployment integration, load tests, and teardown evidence. The abstraction is worth keeping for stable storage and invocation boundaries, but it does not make cloud migration cheap. The AWS methods have offline mocked unit tests only; the required real S3 round trip and SageMaker invocation are not demonstrated because no AWS bucket, credentials, or endpoint is configured.
+
+### Cost and LLM evidence
+
+[`reports/lab5-cost.md`](reports/lab5-cost.md) records the current evidence gap. There is no Lab 5 estimate committed before a run, tagged billing export, measured Lab 5 throughput, applied optimization, teardown verification, or empty-resource screenshot. Do not substitute Lab 2/3 estimates or call the absence of a run “zero cost.” For the token bill, run `make llm-live` only after configuring an existing authorized deployment; then pass its exact model rates and dated regional pricing source to the evaluator. Offline fixture token counts are synthetic and are never priced.
+
+Local checks:
+
+```powershell
+python -m pytest -q
+python scripts/portability_audit.py
+python scripts/llm_eval.py --out reports/llm_eval-baseline.json
+```
+
+`python scripts/llm_eval.py --responses evals/fixtures/triage-regressed.jsonl --out reports/llm_eval-regressed.json --baseline reports/llm_eval-baseline.json` should fail by design and list the cases that regressed.
+
+---
+
 # ITCS355 Lab 4 — CI/CD, Monitoring, and Drift
 
 This is a separate Lab 4 checkout on branch `codex/lab4-cicd-monitoring-drift`. Lab 4 adds

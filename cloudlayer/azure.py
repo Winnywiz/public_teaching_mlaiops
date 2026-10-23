@@ -184,6 +184,16 @@ class AzureAdapter(CloudAdapter):
             )
         return value
 
+    def _containerapp_environment(self, lab: int) -> str:
+        if lab == 5:
+            value = self._env("AZURE_LAB5_CONTAINERAPP_ENVIRONMENT")
+            if not value:
+                raise ValueError(
+                    "AZURE_LAB5_CONTAINERAPP_ENVIRONMENT must name the Lab 5 staging environment"
+                )
+            return value
+        return self.containerapp_environment
+
     def create_container_apps_environment(self) -> str:
         """Create a scale-to-zero environment with platform logging disabled."""
         name = self.containerapp_environment
@@ -274,13 +284,14 @@ class AzureAdapter(CloudAdapter):
             raise ValueError("SERVING_IMAGE_URI must be in the configured Azure Container Registry")
         return image, registry
 
-    def _containerapp_identity(self) -> tuple[dict[str, Any], str, list[dict[str, str]]]:
+    def _containerapp_identity(self, lab: int = 3) -> tuple[dict[str, Any], str, list[dict[str, str]]]:
         """Use a pre-authorized user identity when configured; otherwise system identity."""
-        identity_id = (self._env("AZURE_CONTAINERAPP_IDENTITY") or "").strip()
+        suffix = "LAB5_" if lab == 5 else ""
+        identity_id = (self._env(f"AZURE_{suffix}CONTAINERAPP_IDENTITY") or "").strip()
         if not identity_id:
             return {"type": "SystemAssigned"}, "system", []
         if not identity_id.startswith("/subscriptions/"):
-            raise ValueError("AZURE_CONTAINERAPP_IDENTITY must be a full managed identity resource ID")
+            raise ValueError(f"AZURE_{suffix}CONTAINERAPP_IDENTITY must be a full managed identity resource ID")
         client_id = str(self._run_az(
             "identity", "show", "--ids", identity_id,
             "--query", "clientId", "--output", "tsv",
@@ -293,18 +304,19 @@ class AzureAdapter(CloudAdapter):
             [{"name": "AZURE_CLIENT_ID", "value": client_id}],
         )
 
-    def _containerapp_name(self, endpoint: str) -> str:
-        configured = self._env("AZURE_CONTAINERAPP_NAME")
+    def _containerapp_name(self, endpoint: str, lab: int = 3) -> str:
+        suffix = "LAB5_" if lab == 5 else ""
+        configured = self._env(f"AZURE_{suffix}CONTAINERAPP_NAME")
         candidate = configured or endpoint
         if candidate.startswith(("https://", "http://")):
             host = urlparse(candidate).hostname or ""
             candidate = host.split(".", 1)[0]
         return self._safe_app_name(candidate)
 
-    def _containerapp_detail(self, endpoint: str) -> dict[str, Any]:
+    def _containerapp_detail(self, endpoint: str, lab: int = 3) -> dict[str, Any]:
         return self._run_az(
             "containerapp", "show",
-            "--name", self._containerapp_name(endpoint),
+            "--name", self._containerapp_name(endpoint, lab),
             "--resource-group", self.resource_group,
             json_output=True,
         )
@@ -318,14 +330,14 @@ class AzureAdapter(CloudAdapter):
         }
 
     def _app_yaml(self, endpoint: str, model_name: str, version: str, instance: str | None,
-                  suffix: str, current: dict[str, Any] | None = None) -> dict[str, Any]:
+                  suffix: str, current: dict[str, Any] | None = None, *, lab: int = 3) -> dict[str, Any]:
         image, _registry = self._serving_image()
-        identity, registry_identity, identity_env = self._containerapp_identity()
+        identity, registry_identity, identity_env = self._containerapp_identity(lab)
         cpu, memory = self._container_resources(instance)
-        app_name = self._containerapp_name(endpoint)
+        app_name = self._containerapp_name(endpoint, lab)
         environment = self._run_az(
             "containerapp", "env", "show",
-            "--name", self.containerapp_environment,
+            "--name", self._containerapp_environment(lab),
             "--resource-group", self.resource_group,
             json_output=True,
         )
@@ -381,7 +393,7 @@ class AzureAdapter(CloudAdapter):
                 "scale": {"minReplicas": 0, "maxReplicas": 3},
             }
             env_id = str(properties.get("environmentId") or properties.get("managedEnvironmentId") or environment_id)
-            resource_tags = {**(current.get("tags", {}) or {}), **self.cfg.tags(3)}
+            resource_tags = {**(current.get("tags", {}) or {}), **self.cfg.tags(lab)}
         else:
             configuration = {
                 "activeRevisionsMode": "multiple",
@@ -400,7 +412,7 @@ class AzureAdapter(CloudAdapter):
                 "scale": {"minReplicas": 0, "maxReplicas": 3},
             }
             env_id = environment_id
-            resource_tags = self.cfg.tags(3)
+            resource_tags = self.cfg.tags(lab)
 
         return {
             "location": self.cfg.region,
@@ -417,11 +429,163 @@ class AzureAdapter(CloudAdapter):
         """Deploy a registry version and route all normal traffic to its new revision."""
         return self._deploy(model_ref, endpoint, instance, route_latest=True)
 
+    def deploy_lab5_staging(self, model_ref: str, instance: str = "0.5cpu/1Gi") -> str:
+        """Update only the pre-created Lab 5 staging app through ARM and Entra ID."""
+        endpoint = self._env("AZURE_LAB5_CONTAINERAPP_NAME")
+        if not endpoint:
+            raise ValueError("AZURE_LAB5_CONTAINERAPP_NAME must name the Lab 5 staging app")
+        if not self.cfg.mlflow_tracking_uri.startswith("azureml://"):
+            raise ValueError("Lab 5 staging requires the configured Azure ML model registry")
+        model_name, version = self._model_name_version(model_ref, self.cfg.model_registry_name)
+        app_name = self._containerapp_name(endpoint, 5)
+        environment_name = self._containerapp_environment(5)
+        subscription = quote(self.subscription_id, safe="")
+        resource_group = quote(self.resource_group, safe="")
+        app_path = (
+            f"/subscriptions/{subscription}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.App/containerApps/{quote(app_name, safe='')}"
+        )
+        environment_path = (
+            f"/subscriptions/{subscription}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.App/managedEnvironments/{quote(environment_name, safe='')}"
+        )
+        environment = self._arm_request(
+            "GET", environment_path + "?api-version=" + self._CONTAINER_APP_API_VERSION
+        )
+        current = self._arm_request(
+            "GET", app_path + "?api-version=" + self._CONTAINER_APP_API_VERSION
+        )
+        if (current.get("tags") or {}) != self.cfg.tags(5):
+            raise RuntimeError(
+                f"Refusing to update {app_name}: the existing app must have the exact Lab 5 tags"
+            )
+        properties = current.get("properties", {}) or {}
+        if str(properties.get("environmentId", "")).lower() != str(environment.get("id", "")).lower():
+            raise RuntimeError("the Lab 5 staging app is not attached to the configured Lab 5 environment")
+        configuration = properties.get("configuration", {}) or {}
+        ingress = configuration.get("ingress")
+        if not isinstance(ingress, dict) or not ingress.get("fqdn"):
+            raise RuntimeError("the pre-created Lab 5 staging app must have configured ingress")
+        containers = properties.get("template", {}).get("containers", []) or []
+        if not containers:
+            raise RuntimeError("the pre-created Lab 5 staging app has no container template")
+
+        identity_id = (self._env("AZURE_LAB5_CONTAINERAPP_IDENTITY") or "").strip()
+        client_id = ""
+        if identity_id:
+            if not identity_id.startswith("/subscriptions/"):
+                raise ValueError("AZURE_LAB5_CONTAINERAPP_IDENTITY must be a full resource ID")
+            assigned = ((current.get("identity") or {}).get("userAssignedIdentities", {}) or {})
+            if identity_id not in assigned:
+                raise RuntimeError("the configured serving identity is not attached to the Lab 5 app")
+            identity = self._arm_request(
+                "GET", identity_id + "?api-version=2023-01-31"
+            )
+            client_id = str(identity.get("properties", {}).get("clientId", ""))
+            if not client_id:
+                raise RuntimeError("Azure did not return the serving identity client ID")
+
+        image, _registry = self._serving_image()
+        container = containers[0]
+        container["image"] = image
+        env_vars = {str(item.get("name")): item for item in container.get("env", []) or []
+                    if item.get("name")}
+        values = {
+            "MODEL_REGISTRY_NAME": model_name,
+            "MODEL_VERSION": version,
+            "MLFLOW_TRACKING_URI": self.cfg.mlflow_tracking_uri,
+            "APP_ENVIRONMENT": "staging",
+            "PYTHONUNBUFFERED": "1",
+        }
+        if client_id:
+            values["AZURE_CLIENT_ID"] = client_id
+        for key, value in values.items():
+            env_vars[key] = {"name": key, "value": value}
+        container["env"] = list(env_vars.values())
+
+        suffix = self._revision_suffix(f"lab5-v{version}-{int(time.time())}")
+        properties.setdefault("template", {})["revisionSuffix"] = suffix
+        configuration["activeRevisionsMode"] = "multiple"
+        ingress["traffic"] = [{
+            "revisionName": f"{app_name}--{suffix}",
+            "weight": 100,
+        }]
+        current["properties"] = properties
+        current["tags"] = self.cfg.tags(5)
+        current["location"] = self.cfg.region
+        self._arm_request(
+            "PUT",
+            app_path + "?api-version=" + self._CONTAINER_APP_API_VERSION,
+            payload=current,
+        )
+
+        expected_revision = f"{app_name}--{suffix}"
+        deadline = time.monotonic() + 900
+        while True:
+            detail = self._arm_request(
+                "GET", app_path + "?api-version=" + self._CONTAINER_APP_API_VERSION
+            )
+            live = detail.get("properties", {}) or {}
+            state = str(live.get("provisioningState", "")).lower()
+            if state in {"failed", "canceled", "cancelled"}:
+                raise RuntimeError(f"Lab 5 staging app provisioning failed: {state}")
+            ingress = live.get("configuration", {}).get("ingress", {}) or {}
+            fqdn = ingress.get("fqdn") or live.get("latestRevisionFqdn")
+            revision = live.get("latestRevisionName") or live.get("latestReadyRevisionName")
+            if fqdn and revision == expected_revision and state in {"", "succeeded"}:
+                return f"https://{fqdn}"
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for Lab 5 staging revision {expected_revision}; "
+                    f"state={state or 'unknown'}, revision={revision or 'unknown'}"
+                )
+            time.sleep(10)
+
+    def _arm_request(self, method: str, path_and_query: str, *, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Call the Azure Resource Manager API using the active Entra identity."""
+        try:
+            from azure.identity import DefaultAzureCredential
+        except ImportError as exc:
+            raise RuntimeError("ARM deployment requires azure-identity") from exc
+        credential = DefaultAzureCredential()
+        try:
+            token = credential.get_token("https://management.azure.com/.default").token
+            body = json.dumps(payload).encode("utf-8") if payload is not None else None
+            request = Request(
+                "https://management.azure.com" + path_and_query,
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                method=method,
+            )
+            try:
+                with urlopen(request, timeout=60) as response:
+                    result = response.read().decode("utf-8")
+            except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"Azure ARM request failed with HTTP {exc.code}: {detail}") from exc
+            except URLError as exc:
+                raise RuntimeError(f"Could not reach Azure Resource Manager: {exc.reason}") from exc
+            if not result:
+                return {}
+            decoded = json.loads(result)
+            if not isinstance(decoded, dict):
+                raise RuntimeError("Azure ARM returned a non-object JSON response")
+            return decoded
+        finally:
+            credential.close()
+
     def deploy_canary_revision(self, model_ref: str, endpoint: str, instance: str) -> str:
         """Create a canary revision while preserving the explicitly pinned stable weights."""
         return self._deploy(model_ref, endpoint, instance, route_latest=False)
 
-    def _deploy(self, model_ref: str, endpoint: str, instance: str, *, route_latest: bool) -> str:
+    def _deploy(
+        self, model_ref: str, endpoint: str, instance: str, *,
+        route_latest: bool, lab: int = 3,
+    ) -> str:
         """Deploy a registry version to Azure Container Apps with multi-revision routing."""
         if not self.cfg.mlflow_tracking_uri.startswith("azureml://"):
             raise ValueError(
@@ -429,7 +593,7 @@ class AzureAdapter(CloudAdapter):
                 "set MLFLOW_TRACKING_URI to its azureml:// URI in cloud.env"
             )
         model_name, version = self._model_name_version(model_ref, self.cfg.model_registry_name)
-        app_name = self._containerapp_name(endpoint)
+        app_name = self._containerapp_name(endpoint, lab)
         self._serving_image()
         current_apps = self._run_az(
             "containerapp", "list", "--resource-group", self.resource_group,
@@ -439,13 +603,13 @@ class AzureAdapter(CloudAdapter):
             item for item in current_apps if isinstance(item, dict)
             and str(item.get("name", "")).lower() == app_name.lower()
         ), None) if isinstance(current_apps, list) else None
-        if current and (current.get("tags") or {}) != self.cfg.tags(3):
+        if current and (current.get("tags") or {}) != self.cfg.tags(lab):
             raise RuntimeError(
-                f"Refusing to update Container App {app_name}: it does not have the exact Lab 3 tags"
+                f"Refusing to update Container App {app_name}: it does not have the exact Lab {lab} tags"
             )
         suffix = self._revision_suffix(f"v{version}-{int(time.time())}")
         expected_revision = f"{app_name}--{suffix}"
-        document = self._app_yaml(endpoint, model_name, version, instance, suffix, current)
+        document = self._app_yaml(endpoint, model_name, version, instance, suffix, current, lab=lab)
         temporary_path: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -473,7 +637,7 @@ class AzureAdapter(CloudAdapter):
         deadline = time.monotonic() + 900
         detail: dict[str, Any] = {}
         while True:
-            detail = self._containerapp_detail(app_name)
+            detail = self._containerapp_detail(app_name, lab)
             properties = detail.get("properties", {}) or {}
             provisioning = str(properties.get("provisioningState", "")).lower()
             if provisioning in {"failed", "canceled", "cancelled"}:
@@ -489,7 +653,7 @@ class AzureAdapter(CloudAdapter):
                 or properties.get("latestRevisionFqdn")
             )
             if fqdn and latest_revision == expected_revision:
-                revisions = self.list_revisions(app_name)
+                revisions = self.list_revisions(app_name, lab=lab)
                 if any(
                     item.get("active") and item.get("name") == latest_revision
                     and item.get("model_version") == version
@@ -508,7 +672,7 @@ class AzureAdapter(CloudAdapter):
             time.sleep(10)
         properties = detail.get("properties", {}) or {}
         if route_latest and current is not None:
-            revisions = self.list_revisions(app_name)
+            revisions = self.list_revisions(app_name, lab=lab)
             active_names = {item["name"] for item in revisions if item.get("active") and item.get("name")}
             if not latest_revision:
                 latest_revision = next((
@@ -522,7 +686,7 @@ class AzureAdapter(CloudAdapter):
                 )
             weights = {name: 0 for name in active_names}
             weights[latest_revision] = 100
-            self.set_traffic_weights(app_name, weights)
+            self.set_traffic_weights(app_name, weights, lab=lab)
         fqdn = (
             properties.get("configuration", {}).get("ingress", {}).get("fqdn")
             or properties.get("latestRevisionFqdn")
@@ -559,11 +723,102 @@ class AzureAdapter(CloudAdapter):
             raise RuntimeError("Prediction endpoint returned a non-object JSON response")
         return decoded
 
-    def list_revisions(self, endpoint: str) -> list[dict[str, Any]]:
+    def generate(self, prompt: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Call an Azure OpenAI v1 chat deployment using Entra ID and real usage fields.
+
+        Configure AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT locally or in the
+        managed job environment. No API key is read or written by this adapter.
+        """
+        endpoint = self._env("AZURE_OPENAI_ENDPOINT")
+        deployment = self._env("AZURE_OPENAI_DEPLOYMENT")
+        if not endpoint or not deployment:
+            raise RuntimeError(
+                "Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT to an existing "
+                "Azure OpenAI deployment before using --live. This adapter will not "
+                "create a model deployment."
+            )
+        endpoint = endpoint.rstrip("/")
+        if endpoint.endswith("/openai/v1"):
+            url = f"{endpoint}/chat/completions?api-version=v1"
+        else:
+            url = f"{endpoint}/openai/v1/chat/completions?api-version=v1"
+
+        try:
+            from azure.identity import DefaultAzureCredential
+        except ImportError as exc:
+            raise RuntimeError("Azure OpenAI live evaluation requires azure-identity") from exc
+
+        max_output_tokens = int(params.get("max_output_tokens", 200))
+        temperature = float(params.get("temperature", 0.0))
+        if not 1 <= max_output_tokens <= 4096:
+            raise ValueError("max_output_tokens must be between 1 and 4096")
+        if not 0.0 <= temperature <= 2.0:
+            raise ValueError("temperature must be between 0 and 2")
+
+        credential = DefaultAzureCredential()
+        started = time.monotonic()
+        try:
+            token = credential.get_token("https://ai.azure.com/.default").token
+            messages: list[dict[str, str]] = []
+            system_prompt = str(params.get("system_prompt", "")).strip()
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            body = json.dumps({
+                "model": deployment,
+                "messages": messages,
+                "max_completion_tokens": max_output_tokens,
+                "temperature": temperature,
+            }).encode("utf-8")
+            request = Request(
+                url,
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                method="POST",
+            )
+            try:
+                with urlopen(request, timeout=90) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+            except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"Azure OpenAI request failed with HTTP {exc.code}: {detail}") from exc
+            except URLError as exc:
+                raise RuntimeError(f"Could not reach Azure OpenAI endpoint: {exc.reason}") from exc
+        finally:
+            credential.close()
+
+        usage = result.get("usage") or {}
+        input_tokens = usage.get("prompt_tokens")
+        output_tokens = usage.get("completion_tokens")
+        if input_tokens is None or output_tokens is None:
+            raise RuntimeError(
+                "Azure OpenAI response omitted usage.prompt_tokens or "
+                "usage.completion_tokens; refusing to estimate token counts"
+            )
+        choices = result.get("choices") or []
+        if not choices or not isinstance(choices[0].get("message", {}).get("content"), str):
+            raise RuntimeError("Azure OpenAI response did not contain a text completion")
+        details = usage.get("prompt_tokens_details") or {}
+        cached_input_tokens = int(details.get("cached_tokens", 0) or 0)
+        return {
+            "response": choices[0]["message"]["content"],
+            "input_tokens": int(input_tokens),
+            "output_tokens": int(output_tokens),
+            "cached_input_tokens": cached_input_tokens,
+            "latency_ms": round((time.monotonic() - started) * 1000),
+            "model": str(result.get("model") or deployment),
+            "usage_source": "provider",
+        }
+
+    def list_revisions(self, endpoint: str, *, lab: int = 3) -> list[dict[str, Any]]:
         """Return revision names, traffic weights, readiness, and model versions."""
         revisions = self._run_az(
             "containerapp", "revision", "list",
-            "--name", self._containerapp_name(endpoint),
+            "--name", self._containerapp_name(endpoint, lab),
             "--resource-group", self.resource_group,
             json_output=True,
         )
@@ -581,19 +836,19 @@ class AzureAdapter(CloudAdapter):
             })
         return result
 
-    def set_traffic_weights(self, endpoint: str, weights: dict[str, int]) -> None:
+    def set_traffic_weights(self, endpoint: str, weights: dict[str, int], *, lab: int = 3) -> None:
         """Set explicit revision traffic weights that sum to 100 percent."""
         if not weights or any(not isinstance(weight, int) or weight < 0 or weight > 100 for weight in weights.values()):
             raise ValueError("traffic weights must be non-negative integer percentages")
         if sum(weights.values()) != 100:
             raise ValueError("traffic weights must sum to 100")
-        revisions = {item["name"] for item in self.list_revisions(endpoint)}
+        revisions = {item["name"] for item in self.list_revisions(endpoint, lab=lab)}
         missing = set(weights) - revisions
         if missing:
             raise ValueError("unknown Container Apps revisions: " + ", ".join(sorted(missing)))
         self._run_az(
             "containerapp", "ingress", "traffic", "set",
-            "--name", self._containerapp_name(endpoint),
+            "--name", self._containerapp_name(endpoint, lab),
             "--resource-group", self.resource_group,
             "--revision-weight", *[f"{name}={weight}" for name, weight in weights.items()],
             "--output", "none",
@@ -641,7 +896,7 @@ class AzureAdapter(CloudAdapter):
         suffix = f"/{prefix}" if prefix else "/"
         return f"wasbs://{container}@{account}.blob.core.windows.net{suffix}"
 
-    def upload(self, local_path: str, key: str) -> str:
+    def upload(self, local_path: str, key: str, *, lab: int = 1) -> str:
         source = Path(local_path)
         if not source.is_file():
             raise FileNotFoundError(source)
@@ -1168,12 +1423,128 @@ class AzureAdapter(CloudAdapter):
         changed.append("verified no non-shared Lab 3 Container Apps resources remain")
         return changed
 
+    @staticmethod
+    def _tag_match(resource: dict[str, Any], tags: dict[str, str]) -> bool:
+        found = resource.get("tags", {}) or {}
+        return all(str(found.get(key)) == str(value) for key, value in tags.items())
+
+    def _lab5_resource_lists(self, tags: dict[str, str]) -> dict[str, list[dict[str, Any]]]:
+        common = [
+            "--resource-group", self.resource_group,
+            "--workspace-name", self.workspace_name,
+            "--subscription", self.subscription_id,
+        ]
+        schedules = self._run_az("ml", "schedule", "list", *common, json_output=True)
+        jobs = self._run_az("ml", "job", "list", "--all-results", *common, json_output=True)
+        computes = self._run_az(
+            "ml", "compute", "list", "--resource-group", self.resource_group,
+            "--workspace-name", self.workspace_name, "--subscription", self.subscription_id,
+            json_output=True,
+        )
+        apps = self._run_az(
+            "containerapp", "list", "--resource-group", self.resource_group, json_output=True
+        )
+        environments = self._run_az(
+            "containerapp", "env", "list", "--resource-group", self.resource_group,
+            json_output=True,
+        )
+        return {
+            "schedules": [r for r in schedules if isinstance(r, dict) and self._tag_match(r, tags)]
+            if isinstance(schedules, list) else [],
+            "jobs": [r for r in jobs if isinstance(r, dict) and self._tag_match(r, tags)]
+            if isinstance(jobs, list) else [],
+            "computes": [r for r in computes if isinstance(r, dict) and self._tag_match(r, tags)]
+            if isinstance(computes, list) else [],
+            "apps": [r for r in apps if isinstance(r, dict) and self._tag_match(r, tags)]
+            if isinstance(apps, list) else [],
+            "environments": [r for r in environments if isinstance(r, dict) and self._tag_match(r, tags)]
+            if isinstance(environments, list) else [],
+        }
+
+    def _teardown_lab5_resources(self, tags: dict[str, str]) -> list[str]:
+        if tags != self.cfg.tags(5):
+            raise ValueError("Lab 5 teardown requires the exact configured course/student/lab tags")
+        resources = self._lab5_resource_lists(tags)
+        common = [
+            "--resource-group", self.resource_group,
+            "--workspace-name", self.workspace_name,
+            "--subscription", self.subscription_id,
+        ]
+        changed: list[str] = []
+        for schedule in resources["schedules"]:
+            name = str(schedule.get("name") or "")
+            if not name:
+                continue
+            if schedule.get("is_enabled", schedule.get("isEnabled", True)):
+                self._run_az("ml", "schedule", "disable", "--name", name, *common, "--output", "none")
+            self._run_az("ml", "schedule", "delete", "--name", name, *common, "--output", "none")
+            changed.append(f"disabled and deleted Lab 5 schedule {name}")
+
+        for job in resources["jobs"]:
+            name = str(job.get("name") or "")
+            status = str(job.get("status") or "").lower()
+            if not name:
+                continue
+            if status not in {"completed", "failed", "canceled", "cancelled", "archived"}:
+                self._run_az("ml", "job", "cancel", "--name", name, *common, "--output", "none")
+                changed.append(f"cancelled Lab 5 job {name}")
+            elif status != "archived":
+                self._run_az("ml", "job", "archive", "--name", name, *common, "--output", "none")
+                changed.append(f"archived completed Lab 5 job {name}")
+
+        for app in resources["apps"]:
+            name = str(app.get("name") or "")
+            if name:
+                self._run_az(
+                    "containerapp", "delete", "--name", name,
+                    "--resource-group", self.resource_group, "--yes", "--output", "none",
+                )
+                changed.append(f"deleted Lab 5 Container App {name}")
+
+        for environment in resources["environments"]:
+            name = str(environment.get("name") or "")
+            if name:
+                self._run_az(
+                    "containerapp", "env", "delete", "--name", name,
+                    "--resource-group", self.resource_group, "--yes", "--output", "none",
+                )
+                changed.append(f"deleted Lab 5 Container Apps environment {name}")
+
+        for compute in resources["computes"]:
+            name = str(compute.get("name") or "")
+            if name:
+                self._run_az(
+                    "ml", "compute", "delete", "--name", name, "--yes", *common,
+                    "--output", "none",
+                )
+                changed.append(f"deleted Lab 5 compute {name}")
+        return changed
+
+    def verify_lab5_teardown(self, tags: dict[str, str]) -> list[str]:
+        if tags != self.cfg.tags(5):
+            raise ValueError("Lab 5 verification requires the exact configured course/student/lab tags")
+        remaining = self._lab5_resource_lists(tags)
+        active_jobs = [
+            str(job.get("name")) for job in remaining["jobs"]
+            if str(job.get("status", "")).lower() not in {
+                "completed", "failed", "canceled", "cancelled", "archived"
+            }
+        ]
+        resources = {
+            key: [str(item.get("name") or item.get("id") or "unnamed") for item in value]
+            for key, value in remaining.items()
+        }
+        resources["jobs"] = active_jobs
+        return [f"{key}: {', '.join(names)}" for key, names in resources.items() if names]
+
     def teardown(self, tags: dict[str, str]) -> list[str]:
         """Archive tagged Lab 2 jobs and delete tagged Lab 2/3 resources only."""
         if not tags or tags.get("course") != "itcs355":
             raise ValueError("teardown requires the exact course=itcs355 resource tags")
         if tags.get("lab") == "3":
             return self._teardown_lab3_resources(tags)
+        if tags.get("lab") == "5":
+            return self._teardown_lab5_resources(tags)
 
         def matches(resource: dict[str, Any]) -> bool:
             resource_tags = resource.get("tags", {}) or {}

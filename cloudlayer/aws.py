@@ -6,6 +6,7 @@ an S3 input prefix, and provider-neutral job arguments; all AWS request shapes s
 from __future__ import annotations
 
 import base64
+import json
 import re
 import subprocess
 import time
@@ -77,7 +78,10 @@ class AwsAdapter(CloudAdapter):
     def _sagemaker_client(self):
         return boto3.client("sagemaker", region_name=self.cfg.region or None)
 
-    def upload(self, local_path: str, key: str) -> str:
+    def _sagemaker_runtime_client(self):
+        return boto3.client("sagemaker-runtime", region_name=self.cfg.region or None)
+
+    def upload(self, local_path: str, key: str, *, lab: int = 1) -> str:
         source = Path(local_path)
         if not source.is_file():
             raise FileNotFoundError(source)
@@ -87,7 +91,7 @@ class AwsAdapter(CloudAdapter):
                 Bucket=bucket,
                 Key=object_key,
                 Body=stream,
-                Tagging=urlencode(self.cfg.tags(1)),
+                Tagging=urlencode(self.cfg.tags(lab)),
             )
         return f"s3://{bucket}/{object_key}"
 
@@ -98,6 +102,34 @@ class AwsAdapter(CloudAdapter):
         destination = Path(local_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         self._s3_client().download_file(bucket, object_key, str(destination))
+
+    def delete_uploaded_object(self, uri: str) -> None:
+        """Remove a temporary portability probe after its round-trip has been checked."""
+        bucket, object_key = self._s3_parts(uri)
+        if not object_key:
+            raise ValueError("object URI must include an object key")
+        self._s3_client().delete_object(Bucket=bucket, Key=object_key)
+
+    def invoke(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Invoke one SageMaker real-time endpoint and decode its JSON response."""
+        if not endpoint.strip():
+            raise ValueError("SageMaker endpoint name must not be empty")
+        response = self._sagemaker_runtime_client().invoke_endpoint(
+            EndpointName=endpoint,
+            ContentType="application/json",
+            Accept="application/json",
+            Body=json.dumps(payload).encode("utf-8"),
+        )
+        body = response.get("Body")
+        if body is None or not hasattr(body, "read"):
+            raise RuntimeError("SageMaker response did not contain a readable Body")
+        try:
+            decoded = json.loads(body.read().decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("SageMaker endpoint returned invalid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise RuntimeError("SageMaker endpoint returned a non-object JSON response")
+        return decoded
 
     def push_image(self, local_tag: str) -> str:
         registry, repository = self._ecr_parts()

@@ -1,6 +1,8 @@
 """No-cloud tests for the Lab 3 Azure Container Apps adapter."""
 from __future__ import annotations
 
+import copy
+from io import BytesIO
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -80,9 +82,83 @@ def test_unsupported_aca_resource_pair_is_rejected():
         AzureAdapter._container_resources("1cpu/4Gi")
 
 
+def test_azure_openai_generate_uses_entra_and_provider_usage(monkeypatch):
+    instance = adapter()
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "triage-test-deployment")
+    captured = {}
+
+    class Credential:
+        def get_token(self, scope):
+            captured["scope"] = scope
+            return SimpleNamespace(token="test-token")
+
+        def close(self):
+            captured["closed"] = True
+
+    azure_package = SimpleNamespace(identity=SimpleNamespace(DefaultAzureCredential=Credential))
+    monkeypatch.setitem(__import__("sys").modules, "azure", azure_package)
+    monkeypatch.setitem(__import__("sys").modules, "azure.identity", azure_package.identity)
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        captured["authorization"] = request.get_header("Authorization")
+        captured["timeout"] = timeout
+        return BytesIO(json.dumps({
+            "model": "triage-test-deployment",
+            "choices": [{"message": {"content": "{\\\"decision\\\": \\\"no_action\\\"}"}}],
+            "usage": {
+                "prompt_tokens": 18,
+                "completion_tokens": 7,
+                "prompt_tokens_details": {"cached_tokens": 3},
+            },
+        }).encode())
+
+    monkeypatch.setattr("cloudlayer.azure.urlopen", fake_urlopen)
+    result = instance.generate("machine_id=M-1", {
+        "system_prompt": "Use JSON only.",
+        "max_output_tokens": 80,
+        "temperature": 0.2,
+    })
+
+    assert captured["scope"] == "https://ai.azure.com/.default"
+    assert captured["closed"] is True
+    assert captured["authorization"] == "Bearer test-token"
+    assert captured["body"]["max_completion_tokens"] == 80
+    assert captured["body"]["messages"][0] == {"role": "system", "content": "Use JSON only."}
+    assert result["input_tokens"] == 18
+    assert result["output_tokens"] == 7
+    assert result["cached_input_tokens"] == 3
+    assert result["usage_source"] == "provider"
+
+
+def test_azure_openai_generate_refuses_to_estimate_missing_usage(monkeypatch):
+    instance = adapter()
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "triage-test-deployment")
+
+    class Credential:
+        def get_token(self, scope):
+            return SimpleNamespace(token="test-token")
+
+        def close(self):
+            pass
+
+    azure_package = SimpleNamespace(identity=SimpleNamespace(DefaultAzureCredential=Credential))
+    monkeypatch.setitem(__import__("sys").modules, "azure", azure_package)
+    monkeypatch.setitem(__import__("sys").modules, "azure.identity", azure_package.identity)
+    monkeypatch.setattr("cloudlayer.azure.urlopen", lambda *args, **kwargs: BytesIO(
+        json.dumps({"choices": [{"message": {"content": "hello"}}], "usage": {}}).encode()
+    ))
+
+    with pytest.raises(RuntimeError, match="refusing to estimate token counts"):
+        instance.generate("hello", {})
+
+
 def test_new_app_template_uses_digest_image_registry_model_and_probes(monkeypatch):
     instance = adapter()
-    monkeypatch.setattr(instance, "_containerapp_identity", lambda: ({"type": "SystemAssigned"}, "system", []))
+    monkeypatch.setattr(instance, "_containerapp_identity", lambda lab=3: ({"type": "SystemAssigned"}, "system", []))
     monkeypatch.setattr(
         instance,
         "_env",
@@ -100,6 +176,95 @@ def test_new_app_template_uses_digest_image_registry_model_and_probes(monkeypatc
     assert {item["name"]: item["value"] for item in container["env"]}["MODEL_VERSION"] == "7"
     assert {probe["type"] for probe in container["probes"]} == {"Liveness", "Readiness", "Startup"}
     assert properties["template"]["scale"]["minReplicas"] == 0
+
+
+def test_lab5_deployment_uses_separate_name_tags_and_environment(monkeypatch):
+    instance = adapter()
+    monkeypatch.setenv("AZURE_LAB5_CONTAINERAPP_NAME", "itcs355-lab5-staging")
+    monkeypatch.setenv("AZURE_LAB5_CONTAINERAPP_ENVIRONMENT", "itcs355-lab5-env")
+    monkeypatch.setattr(instance, "_containerapp_identity", lambda lab=5: ({"type": "SystemAssigned"}, "system", []))
+    monkeypatch.setattr(instance, "_run_az", lambda *args, **kwargs: {"id": "/subscriptions/test/envs/lab5"})
+    monkeypatch.setattr(instance, "_serving_image", lambda: ("example.azurecr.io/itcs355@sha256:" + "b" * 64, "itcs355"))
+
+    document = instance._app_yaml(
+        "itcs355-lab5-staging", "itcs355-test", "8", "0.5cpu/1Gi", "v8-test", lab=5
+    )
+    assert document["tags"]["lab"] == "5"
+    assert document["properties"]["environmentId"].endswith("lab5")
+
+
+def test_lab5_staging_requires_its_separate_app_name(monkeypatch):
+    instance = adapter()
+    monkeypatch.delenv("AZURE_LAB5_CONTAINERAPP_NAME", raising=False)
+    with pytest.raises(ValueError, match="AZURE_LAB5_CONTAINERAPP_NAME"):
+        instance.deploy_lab5_staging("models:/itcs355-test/8")
+
+
+def test_lab5_staging_uses_arm_and_refuses_unowned_resources(monkeypatch):
+    instance = adapter()
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "test-subscription")
+    monkeypatch.setenv("AZURE_RESOURCE_GROUP", "lab5-rg")
+    monkeypatch.setenv("AZURE_LAB5_CONTAINERAPP_NAME", "itcs355-lab5-staging")
+    monkeypatch.setenv("AZURE_LAB5_CONTAINERAPP_ENVIRONMENT", "itcs355-lab5-env")
+    monkeypatch.delenv("AZURE_LAB5_CONTAINERAPP_IDENTITY", raising=False)
+    monkeypatch.setattr(
+        instance, "_serving_image",
+        lambda: ("example.azurecr.io/itcs355@sha256:" + "c" * 64, "itcs355"),
+    )
+    environment_id = "/subscriptions/test/resourceGroups/lab5-rg/providers/Microsoft.App/managedEnvironments/itcs355-lab5-env"
+    current = {
+        "location": "japaneast",
+        "tags": {"course": "itcs355", "student": "student-test", "lab": "5"},
+        "identity": {"type": "SystemAssigned"},
+        "properties": {
+            "environmentId": environment_id,
+            "provisioningState": "Succeeded",
+            "configuration": {"ingress": {"fqdn": "lab5.example.test", "traffic": []}},
+            "template": {
+                "containers": [{"name": "app", "image": "old", "env": []}],
+                "scale": {"minReplicas": 0, "maxReplicas": 3},
+            },
+        },
+    }
+    calls = []
+
+    def arm(method, path, *, payload=None):
+        calls.append((method, path, payload))
+        resource = path.split("?", 1)[0]
+        if "managedEnvironments" in resource:
+            return {"id": environment_id}
+        if method == "PUT":
+            updated = copy.deepcopy(payload)
+            suffix = updated["properties"]["template"]["revisionSuffix"]
+            updated["properties"]["latestRevisionName"] = f"itcs355-lab5-staging--{suffix}"
+            updated["properties"]["latestRevisionFqdn"] = "lab5.example.test"
+            updated["properties"]["provisioningState"] = "Succeeded"
+            current.clear()
+            current.update(updated)
+            return {}
+        return copy.deepcopy(current)
+
+    monkeypatch.setattr(instance, "_arm_request", arm)
+    endpoint = instance.deploy_lab5_staging("models:/itcs355-test/8")
+
+    assert endpoint == "https://lab5.example.test"
+    update = next(call[2] for call in calls if call[0] == "PUT")
+    assert update["tags"]["lab"] == "5"
+    assert update["properties"]["template"]["containers"][0]["image"].endswith("c" * 64)
+    assert {item["name"]: item["value"] for item in update["properties"]["template"]["containers"][0]["env"]}["MODEL_VERSION"] == "8"
+
+
+def test_lab5_staging_refuses_app_with_wrong_tags(monkeypatch):
+    instance = adapter()
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "test-subscription")
+    monkeypatch.setenv("AZURE_RESOURCE_GROUP", "lab5-rg")
+    monkeypatch.setenv("AZURE_LAB5_CONTAINERAPP_NAME", "itcs355-lab5-staging")
+    monkeypatch.setenv("AZURE_LAB5_CONTAINERAPP_ENVIRONMENT", "itcs355-lab5-env")
+    monkeypatch.setattr(instance, "_arm_request", lambda method, path, *, payload=None: (
+        {"id": "env-id"} if "managedEnvironments" in path else {"tags": {"lab": "3"}}
+    ))
+    with pytest.raises(RuntimeError, match="exact Lab 5 tags"):
+        instance.deploy_lab5_staging("models:/itcs355-test/8")
 
 
 def test_pre_authorized_user_identity_is_used_for_acr_and_mlflow(monkeypatch):
@@ -123,7 +288,7 @@ def test_traffic_weights_require_known_revisions_and_total_100(monkeypatch):
     monkeypatch.setattr(
         instance,
         "list_revisions",
-        lambda endpoint: [{"name": "app--stable"}, {"name": "app--candidate"}],
+        lambda endpoint, lab=3: [{"name": "app--stable"}, {"name": "app--candidate"}],
     )
     commands = []
     monkeypatch.setattr(instance, "_run_az", lambda *args, **kwargs: commands.append(args))
@@ -235,7 +400,7 @@ def test_update_routes_latest_normally_but_preserves_stable_for_canary(monkeypat
             "AZURE_SUBSCRIPTION_ID": "test-subscription",
         }.get(name, default),
     )
-    monkeypatch.setattr(instance, "_containerapp_identity", lambda: ({"type": "SystemAssigned"}, "system", []))
+    monkeypatch.setattr(instance, "_containerapp_identity", lambda lab=3: ({"type": "SystemAssigned"}, "system", []))
 
     def run_az(*args, **kwargs):
         nonlocal latest_revision
